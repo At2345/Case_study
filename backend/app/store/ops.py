@@ -34,10 +34,12 @@ class ScheduleStore:
 
     def all(self) -> List[Dict[str, Any]]:
         order = list(DEFAULTS)
-        docs = [{k: v for k, v in d.items() if k != "_id"} for d in self.col.find({})]
+        docs = [{k: v for k, v in d.items() if k != "_id"} for d in self.col.find({"job": {"$in": order}})]
         return sorted(docs, key=lambda d: order.index(d["job"]) if d["job"] in order else len(order))
 
     def get(self, job: str) -> Optional[Dict[str, Any]]:
+        if job not in DEFAULTS:
+            return None
         d = self.col.find_one({"job": job})
         return None if d is None else {k: v for k, v in d.items() if k != "_id"}
 
@@ -48,7 +50,7 @@ class ScheduleStore:
 
     def due(self, now: datetime) -> List[Dict[str, Any]]:
         return [{k: v for k, v in d.items() if k != "_id"}
-                for d in self.col.find({"enabled": True, "next_run_at": {"$lte": now.isoformat()}})]
+                for d in self.col.find({"job": {"$in": list(DEFAULTS)}, "enabled": True, "next_run_at": {"$lte": now.isoformat()}})]
 
     def claim(self, job: str, expected_next: str, new_next: str) -> bool:
         res = self.col.update_one({"job": job, "next_run_at": expected_next}, {"$set": {"next_run_at": new_next}})

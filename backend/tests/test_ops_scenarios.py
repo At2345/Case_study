@@ -34,12 +34,12 @@ class TestSchedules:
         s = {x["job"]: x for x in d["schedules"]}
         assert s["monthly_cycle"]["frequency"] == "monthly" and s["monthly_cycle"]["day"] == 2
         assert s["monthly_cycle"]["hour"] == 6 and s["monthly_cycle"]["minute"] == 0
-        assert s["amazon_daily"]["frequency"] == "daily" and s["amazon_daily"]["hour"] == 5
-        assert "_id" not in s["amazon_daily"]
+        assert "amazon_daily" not in s
+        assert "_id" not in s["monthly_cycle"]
 
     def test_planner_forbidden(self):
-        r = requests.put(f"{BASE}/admin/schedules/amazon_daily", headers=h("danny"),
-                         json={"enabled": True, "frequency": "daily", "hour": 5, "minute": 0}, timeout=30)
+        r = requests.put(f"{BASE}/admin/schedules/monthly_cycle", headers=h("danny"),
+                         json={"enabled": True, "frequency": "monthly", "day": 2, "hour": 6, "minute": 0}, timeout=30)
         assert r.status_code == 403
 
     def test_unknown_job_404(self):
@@ -71,11 +71,11 @@ class TestSchedules:
         assert r.status_code == 200 and r.json()["day"] == 2 and r.json()["hour"] == 6
 
     def test_disable_and_restore(self):
-        r = requests.put(f"{BASE}/admin/schedules/amazon_daily", headers=h("admin"),
-                         json={"enabled": False, "frequency": "daily", "hour": 5, "minute": 0}, timeout=30)
+        r = requests.put(f"{BASE}/admin/schedules/monthly_cycle", headers=h("admin"),
+                         json={"enabled": False, "frequency": "monthly", "day": 2, "hour": 6, "minute": 0}, timeout=30)
         assert r.status_code == 200 and r.json()["enabled"] is False
-        r = requests.put(f"{BASE}/admin/schedules/amazon_daily", headers=h("admin"),
-                         json={"enabled": True, "frequency": "daily", "hour": 5, "minute": 0}, timeout=30)
+        r = requests.put(f"{BASE}/admin/schedules/monthly_cycle", headers=h("admin"),
+                         json={"enabled": True, "frequency": "monthly", "day": 2, "hour": 6, "minute": 0}, timeout=30)
         assert r.status_code == 200 and r.json()["enabled"] is True
 
 

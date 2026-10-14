@@ -3,7 +3,7 @@ import { Clock, Save } from "lucide-react";
 import { api } from "../services/api";
 import { Panel, ErrorNote } from "./ui";
 
-const LABEL = { monthly_cycle: "Monthly cycle", amazon_daily: "Amazon daily pipeline" };
+const LABEL = { monthly_cycle: "Monthly cycle" };
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London", dateStyle: "medium", timeStyle: "short" }) : "-");
 
 function ScheduleRow({ s, isAdmin, onSaved }) {

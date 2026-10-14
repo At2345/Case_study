@@ -26,6 +26,7 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [committing, setCommitting] = useState(false);
   const [page, setPage] = useState("workbench");
+  const [scenarioPrompt, setScenarioPrompt] = useState("");
 
   const logout = useCallback(() => {
     api.logout();
@@ -105,6 +106,36 @@ export default function App() {
     }
   };
 
+  const navigateAction = (action) => {
+    if (action.type === "scenario_prompt") {
+      setScenarioPrompt(action.prompt);
+      setPage("scenarios");
+      setNotice("Scenario prompt loaded. Generate an editable draft when ready.");
+      return;
+    }
+    if (action.type === "apply_autopilot") {
+      setPage("scorecard");
+      setNotice("Opened FVA & audit. Review the autopilot recommendation before applying.");
+      return;
+    }
+    if (action.type === "review_phasing") {
+      setPage("supply");
+      setNotice("Opened Supply & risk for delivery phasing review.");
+      return;
+    }
+    if (action.filters) {
+      setFilters({ ...DEFAULT_FILTERS, ...action.filters });
+      setPage("workbench");
+      setNotice("Opened the workbench queue filtered to the selected risk flag.");
+      return;
+    }
+    if (action.item_id) {
+      setSelectedId(action.item_id);
+      setPage("workbench");
+      setNotice(`Opened item ${action.item_id} in the workbench.`);
+    }
+  };
+
   if (!user) return <Login onLoggedIn={setUser} />;
 
   return (
@@ -115,10 +146,10 @@ export default function App() {
       {notice && <div className="mx-8 mt-4 bg-emerald-950/50 border border-emerald-800 text-emerald-200 rounded-lg px-4 py-3 text-xs">{notice}</div>}
       {error && <div role="alert" className="mx-8 mt-4 bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-4 py-3 text-xs">{error}</div>}
       {page === "scorecard" && <ScorecardPage role={user.role} />}
-      {page === "supply" && <SupplyRiskPage />}
-      {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} />}
-      {page === "copilot" && <CopilotPage />}
-      {page === "scenarios" && <ScenariosPage user={user} summary={summary} />}
+      {page === "supply" && <SupplyRiskPage onNavigateAction={navigateAction} />}
+      {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} onNavigateAction={navigateAction} />}
+      {page === "copilot" && <CopilotPage onNavigateAction={navigateAction} />}
+      {page === "scenarios" && <ScenariosPage user={user} summary={summary} initialPrompt={scenarioPrompt} />}
       {page === "workbench" && <SummaryCards summary={summary} />}
       {page === "workbench" && <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
         <ExceptionTable data={queue} filters={filters} onFilters={setFilters} selectedId={selectedId} onSelect={setSelectedId} loading={loading} />

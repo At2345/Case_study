@@ -1,7 +1,7 @@
 """Monthly cycle as a LangGraph StateGraph (Section 7 orchestration state machine).
 
-TRIGGER -> INGEST/VALIDATE -> AMAZON_DAILY -> BASE_INFERENCE -> RECONCILE -> PHASING -> PROMO_LIFECYCLE_RULES/TRIAGE
--> BANDS/SAFETY_STOCK -> NARRATIVE -> HUMAN_REVIEW (interrupt). Commit happens in the workbench.
+TRIGGER -> INGEST/VALIDATE -> BASE_INFERENCE -> RECONCILE -> PHASING -> PROMO_LIFECYCLE_RULES/TRIAGE
+-> BANDS/SAFETY_STOCK -> NARRATIVE -> AGENT_ACTIONS -> HUMAN_REVIEW (interrupt). Commit happens in the workbench.
 Each node is guarded; a failed guard halts the run and nothing after it is published.
 """
 from __future__ import annotations
@@ -46,17 +46,6 @@ def ingest_validate() -> Dict[str, Any]:
         raise GuardError(f"schema contract violations: {issues}")
     counts = row_counts()
     return {"tables": len(counts), "rows": int(sum(counts.values()))}
-
-
-def amazon_daily() -> Dict[str, Any]:
-    from app.pipeline.daily_amazon import run
-    r = run()
-    worst = min(c["match_rate"] for c in r["regression"]["columns"].values() if c["match_rate"] is not None)
-    if worst < 0.99:
-        raise GuardError(f"daily->monthly regression match rate {worst:.3f} < 0.99")
-    if not r["sla_ok"]:
-        raise GuardError(f"NF-04 SLA breached: {r['total_seconds']}s")
-    return {"rows_in": r["rows_in"], "seconds": r["total_seconds"], "surge_items": r["surge_items"], "min_match_rate": worst}
 
 
 def base_inference() -> Dict[str, Any]:
@@ -118,10 +107,17 @@ def narrative() -> Dict[str, Any]:
     return {"narratives": int(len(q)), "mode": "deterministic; LLM on demand per item"}
 
 
+def agent_actions() -> Dict[str, Any]:
+    from app.orchestration import agent_actions as actions
+    payload = actions.write(settings.reports_dir)
+    return {"actions": int(len(payload["actions"])), "scenarios": int(len(payload["scenario_prompts"])),
+            "dynamic_forecasts": int(len(payload["dynamic_forecasts"])), "artifact": actions.ARTIFACT}
+
+
 NODES = [
-    ("ingest_validate", ingest_validate), ("amazon_daily", amazon_daily), ("base_inference", base_inference),
-    ("reconcile", reconcile), ("phasing", phasing), ("rules_triage", rules_triage),
-    ("bands_safety", bands_safety), ("narrative", narrative),
+    ("ingest_validate", ingest_validate), ("base_inference", base_inference), ("reconcile", reconcile),
+    ("phasing", phasing), ("rules_triage", rules_triage), ("bands_safety", bands_safety),
+    ("narrative", narrative), ("agent_actions", agent_actions),
 ]
 
 

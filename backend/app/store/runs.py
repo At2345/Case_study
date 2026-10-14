@@ -41,6 +41,11 @@ class RunStore:
     def recent(self, limit: int = 20) -> List[Dict[str, Any]]:
         return [_out(d) for d in self.col.find({}, sort=[("started_at", -1)], limit=limit)]
 
+    def get(self, run_id: str) -> Optional[Dict[str, Any]]:
+        from bson import ObjectId
+        d = self.col.find_one({"_id": ObjectId(run_id)})
+        return None if d is None else _out(d)
+
     def fail_stale(self) -> List[str]:
         ids = [str(d["_id"]) for d in self.col.find({"status": "RUNNING"}, {"_id": 1})]
         self.col.update_many({"status": "RUNNING"}, {"$set": {"status": "FAILED", "error": "server restarted during the run"}})

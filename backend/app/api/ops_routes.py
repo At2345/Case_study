@@ -1,15 +1,16 @@
 """Schedules, notifications and what-if scenario endpoints."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.models.enums import Role
+from app.models.enums import ReasonCode, Role
 from app.orchestration import scheduler as sched
 from app.rules import otif
-from app.scenarios import engine
+from app.scenarios import engine, generator
 
 MAX_COMPARE = 3
 
@@ -43,10 +44,15 @@ class ScenarioIn(BaseModel):
     edits: List[Union[PctEdit, ItemEdit]] = Field(default_factory=list)
 
 
+class ScenarioGenerateIn(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=500)
+
+
 def register_ops(app: FastAPI, ctx: Dict[str, Any]) -> None:
     state, require, decisions, all_roles = ctx["state"], ctx["require"], ctx["decisions"], ctx["all_roles"]
     write_roles, admin = (Role.PLANNER.value, Role.ADMIN.value), Role.ADMIN.value
     schedules, notes, scenarios, store_dir = ctx.get("schedules"), ctx.get("notes"), ctx.get("scenarios"), ctx["store_dir"]
+    ledger = ctx.get("ledger")
 
     def need(store, what: str):
         if store is None:
@@ -110,6 +116,19 @@ def register_ops(app: FastAPI, ctx: Dict[str, Any]) -> None:
         check_edits(edits)
         return need(scenarios, "Scenario").create(state["svc"].cutoff, payload.name, payload.description, edits, user["username"])
 
+    @app.post("/api/v1/scenarios/generate")
+    def generate_scenario(payload: ScenarioGenerateIn, user=Depends(require(*write_roles))):
+        try:
+            proposal = generator.generate(payload.prompt, state["svc"])
+            check_edits(proposal["edits"])
+            return proposal
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    @app.get("/api/v1/scenarios/suggestions")
+    def scenario_suggestions(user=Depends(require(*all_roles))):
+        return {"cutoff": state["svc"].cutoff, "suggestions": generator.suggest(state["svc"], decisions())}
+
     @app.put("/api/v1/scenarios/{scenario_id}")
     def update_scenario(scenario_id: str, payload: ScenarioIn, user=Depends(require(*write_roles))):
         owned(scenario_id, user)
@@ -134,3 +153,41 @@ def register_ops(app: FastAPI, ctx: Dict[str, Any]) -> None:
             raise HTTPException(status_code=404, detail="Scenario not found")
         svc = state["svc"]
         return engine.compare(svc, svc.consensus(decisions()), found, otif.load_terms(store_dir))
+
+    @app.post("/api/v1/scenarios/{scenario_id}/promote")
+    def promote_scenario(scenario_id: str, request: Request, user=Depends(require(*write_roles))):
+        """Write a scenario's first-month quantities as audited overrides (PRD backlog: promote to ledger)."""
+        if ledger is None:
+            raise HTTPException(status_code=503, detail="Audit ledger is not configured.")
+        svc = state["svc"]
+        if ledger.commit_for(svc.cutoff):
+            raise HTTPException(status_code=409, detail="Cycle already committed; decisions are closed.")
+        s = owned(scenario_id, user)
+        base = svc.consensus(decisions())
+        plan = engine.apply_edits(base, s["edits"])
+        m1 = plan[plan["month"] == svc.first_month]
+        current = base[base["month"] == svc.first_month].set_index("item_id")["consensus_qty"]
+        records = []
+        for r in m1.itertuples():
+            row = svc.item_row(int(r.item_id))
+            if row is None or not bool(row["in_scope"]):
+                continue
+            qty = float(r.consensus_qty)
+            if abs(qty - float(current.get(int(r.item_id), qty))) < 1e-6:
+                continue  # the scenario did not change this item's first-month quantity
+            baseline, recommended = svc.month_values(int(r.item_id), svc.first_month)
+            record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(), "item_id": int(r.item_id), "cutoff": svc.cutoff,
+                "target_month": svc.first_month, "baseline_quantity": baseline, "ml_recommended_quantity": recommended,
+                "submitted_quantity": qty, "variance_to_ml": qty - recommended,
+                "financial_impact_gbp": (qty - recommended) * float(row["sales_price"]),
+                "reason_code": ReasonCode.COMMERCIAL_INTELLIGENCE.value,
+                "planner_comment": f"Promoted from scenario '{s['name']}' ({scenario_id}).",
+                "planner_id": user["username"],
+                "ip_address": request.client.host if request.client else None,
+                "session_id": request.headers.get("X-Session-Id") or user["jti"],
+                "tier": row["tier"], "risk_type": row["risk_type"],
+            }
+            record["id"] = ledger.append_override(record)
+            records.append(record)
+        return {"scenario_id": scenario_id, "promoted": len(records), "records": records}

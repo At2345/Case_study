@@ -28,9 +28,10 @@ function SafetySummary({ s }) {
   );
 }
 
-export default function SupplyRiskPage() {
+export default function SupplyRiskPage({ onNavigateAction }) {
   const [ss, setSs] = useState(null);
   const [otif, setOtif] = useState(null);
+  const [flags, setFlags] = useState(null);
   const [channel, setChannel] = useState("");
   const [error, setError] = useState(null);
 
@@ -38,11 +39,27 @@ export default function SupplyRiskPage() {
     api.safetyStock({ channel, abc_category: "", limit: 25 }).then(setSs).catch((e) => setError(e.message));
   }, [channel]);
   useEffect(() => { api.otif(50).then(setOtif).catch((e) => setError(e.message)); }, []);
+  useEffect(() => { api.riskFlags().then(setFlags).catch(() => {}); }, []);
+  const openItem = (itemId) => onNavigateAction && onNavigateAction({ type: "review_exception", item_id: itemId });
+  const openFlag = (riskType, ch) => onNavigateAction && onNavigateAction({ type: "review_exception", filters: { risk_type: riskType, channel: ch } });
 
   return (
     <div className="px-8 py-6 space-y-6" data-testid="supply-risk-page">
       <ErrorNote error={error} />
-      <Panel title="Dynamic safety stock (Phase 3)" testId="safety-stock-panel"
+      {flags && flags.rows.length > 0 && (
+        <Panel title="Supply risk flags" testId="risk-flags-panel" subtitle={flags.note}>
+          <div className="flex flex-wrap gap-2">
+            {flags.rows.map((f) => (
+              <button key={`${f.channel}-${f.risk_type}`} type="button" data-testid={`risk-flag-${f.risk_type}-${f.channel}`}
+                onClick={() => openFlag(f.risk_type, f.channel)}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 ${f.risk_type === "OOS_RISK" ? "bg-rose-950/40 border-rose-800 text-rose-200" : f.risk_type === "OVERSTOCK_RISK" ? "bg-amber-950/40 border-amber-800 text-amber-200" : "bg-sky-950/40 border-sky-800 text-sky-200"}`}>
+                <span className="font-mono">{fmtNum(f.count)}</span> {f.risk_type.replace(/_/g, " ")} · {f.channel}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+      <Panel title="Dynamic safety stock" testId="safety-stock-panel"
         subtitle="SS = z x sqrt(LT x sigma_forecast^2 + demand^2 x sigma_LT^2). Sigma comes from the conformal P10-P90 band; lead time from order-book ordered_at to delivered_at plus a monthly review period. Achieved service is back-tested on the latest backtest cutoff.">
         {ss && !ss.available && <div className="text-xs text-slate-500">Run the monthly cycle to compute the bands and safety stock.</div>}
         {ss && ss.available && (
@@ -56,6 +73,14 @@ export default function SupplyRiskPage() {
                     { key: "rows", label: "Rows", right: true, render: (r) => fmtNum(r.rows) },
                     { key: "coverage", label: "P10-P90 cover", right: true, render: (r) => pct(r.coverage) }]} />
                 <p className="text-[10px] text-slate-500 mt-2">Target 80%. Higher means the bands are conservative (wide).</p>
+                {ss.coverage_history && ss.coverage_history.length > 0 && (
+                  <>
+                    <h3 className="text-xs font-semibold text-slate-300 mt-5 mb-2">Band calibration history (per cycle run)</h3>
+                    <DataTable testId="coverage-history-table" rows={ss.coverage_history}
+                      columns={[{ key: "started_at", label: "Run at", render: (r) => new Date(r.started_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) },
+                        { key: "band_coverage", label: "P10-P90 cover", right: true, render: (r) => pct(r.band_coverage) }]} />
+                  </>
+                )}
                 <h3 className="text-xs font-semibold text-slate-300 mt-5 mb-2">Lead times (order book)</h3>
                 <DataTable rows={ss.summary.lead_times}
                   columns={[{ key: "channel", label: "Channel" },
@@ -72,7 +97,9 @@ export default function SupplyRiskPage() {
                   </select>
                 </div>
                 <DataTable testId="ss-items-table" rows={ss.items}
-                  columns={[{ key: "item_id", label: "Item" }, { key: "channel", label: "Channel" }, { key: "abc_category", label: "ABC" },
+                  columns={[{ key: "item_id", label: "Item", render: (r) => onNavigateAction ? (
+                    <button data-testid={`ss-open-${r.item_id}`} onClick={() => openItem(r.item_id)} className="text-indigo-300 hover:text-indigo-200 font-semibold">{r.item_id}</button>
+                  ) : r.item_id }, { key: "channel", label: "Channel" }, { key: "abc_category", label: "ABC" },
                     { key: "final_m1", label: "Plan M1", right: true, render: (r) => fmtNum(r.final_m1) },
                     { key: "band", label: "P10-P90", right: true, render: (r) => `${fmtNum(r.p10)}-${fmtNum(r.p90)}` },
                     { key: "ss_static", label: "SS static", right: true, render: (r) => fmtNum(r.ss_static) },
@@ -83,7 +110,7 @@ export default function SupplyRiskPage() {
           </div>
         )}
       </Panel>
-      <Panel title="OTIF exposure (F-B2B-03)" testId="otif-panel"
+      <Panel title="OTIF exposure" testId="otif-panel"
         subtitle={otif ? `${otif.note} Terms: fill below ${otif.terms.default.min_fill * 100}% of booked units costs ${otif.terms.default.penalty_pct * 100}% of the shortfall value (${otif.terms.source}).` : ""}>
         {otif && (
           <div className="space-y-4">
@@ -99,6 +126,17 @@ export default function SupplyRiskPage() {
                 { key: "plan", label: "Plan", right: true, render: (r) => fmtNum(r.plan) },
                 { key: "fill_rate", label: "Fill", right: true, render: (r) => pct(r.fill_rate) },
                 { key: "penalty_gbp", label: "Penalty", right: true, render: (r) => fmtGbpPlain(r.penalty_gbp) }]} />
+            {otif.by_customer && otif.by_customer.length > 0 && (
+              <div>
+                <h3 className="text-xs font-semibold text-slate-300 mb-2">By customer (booked share of the uncovered units)</h3>
+                <DataTable testId="otif-customer-table" rows={otif.by_customer.slice(0, 15)}
+                  columns={[{ key: "customer_id", label: "Customer" }, { key: "item_id", label: "Item" },
+                    { key: "month", label: "Month", render: (r) => monthLabel(r.month) },
+                    { key: "booked", label: "Booked", right: true, render: (r) => fmtNum(r.booked) },
+                    { key: "shortfall_units", label: "Shortfall share", right: true, render: (r) => fmtNum(r.shortfall_units) },
+                    { key: "penalty_gbp", label: "Penalty", right: true, render: (r) => fmtGbpPlain(r.penalty_gbp) }]} />
+              </div>
+            )}
           </div>
         )}
       </Panel>

@@ -122,12 +122,13 @@ def test_schedule_store_seeds_defaults_and_claims_atomically(db):
     from app.store.ops import ScheduleStore
     s = ScheduleStore(db)
     jobs = {r["job"]: r for r in s.all()}
-    assert jobs["monthly_cycle"]["day"] == 2 and jobs["monthly_cycle"]["hour"] == 6 and jobs["amazon_daily"]["hour"] == 5
-    nxt = jobs["amazon_daily"]["next_run_at"]
-    assert s.claim("amazon_daily", nxt, "2099-01-01T00:00:00+00:00") is True
-    assert s.claim("amazon_daily", nxt, "2099-01-02T00:00:00+00:00") is False
+    assert jobs["monthly_cycle"]["day"] == 2 and jobs["monthly_cycle"]["hour"] == 6
+    assert "amazon_daily" not in jobs
+    nxt = jobs["monthly_cycle"]["next_run_at"]
+    assert s.claim("monthly_cycle", nxt, "2099-01-01T00:00:00+00:00") is True
+    assert s.claim("monthly_cycle", nxt, "2099-01-02T00:00:00+00:00") is False
     ScheduleStore(db)  # idempotent re-seed
-    assert len(s.all()) == 2
+    assert len(s.all()) == 1
 
 
 def test_notifications_are_per_role_and_per_user_read_state(db):

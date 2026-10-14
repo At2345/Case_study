@@ -63,17 +63,25 @@ def create_app(
         version="1.0.0",
     )
     app.state.narrator = narrator or Narrator(None, store_dir / "narratives.db")
+    from app.orchestration.jobs import JobRunner
+
     runs = chats = jobs = schedules = notes = scenarios = None
     if db is not None:
-        from app.orchestration.jobs import JobRunner
         from app.store.ops import NotificationStore, ScenarioStore, ScheduleStore
         from app.store.runs import ChatStore, RunStore
         runs, chats = RunStore(db), ChatStore(db)
         schedules, notes, scenarios = ScheduleStore(db), NotificationStore(db), ScenarioStore(db)
-        for run_id in runs.fail_stale():
-            notes.add(["admin"], "error", "Pipeline run interrupted", "The server restarted during the run; start it again from Operations.",
-                      "operations", run_id)
-        jobs = JobRunner(state, runs, reload_fn, notes)
+    else:
+        from app.store.local import JsonChatStore, JsonNotificationStore, JsonRunStore, JsonScenarioStore, JsonScheduleStore
+        runs = JsonRunStore(store_dir / "cycle_runs.json")
+        chats = JsonChatStore(store_dir / "assistant_messages.json")
+        schedules = JsonScheduleStore(store_dir / "schedules.json")
+        notes = JsonNotificationStore(store_dir / "notifications.json")
+        scenarios = JsonScenarioStore(store_dir / "scenarios.json")
+    for run_id in runs.fail_stale():
+        notes.add(["admin"], "error", "Pipeline run interrupted", "The server restarted during the run; start it again from Operations.",
+                  "operations", run_id)
+    jobs = JobRunner(state, runs, reload_fn, notes)
     app.state.jobs, app.state.schedules = jobs, schedules
     metrics = Metrics()
 
@@ -333,7 +341,8 @@ def create_app(
                    "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn, "jobs": jobs})
     from app.api.ops_routes import register_ops
     register_ops(app, {"state": state, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
-                       "schedules": schedules, "notes": notes, "scenarios": scenarios, "store_dir": store_dir})
+                       "schedules": schedules, "notes": notes, "scenarios": scenarios, "store_dir": store_dir,
+                       "ledger": ledger})
     return app
 
 

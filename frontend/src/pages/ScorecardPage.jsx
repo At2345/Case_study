@@ -29,6 +29,7 @@ export default function ScorecardPage({ role }) {
   const [verify, setVerify] = useState(null);
   const [error, setError] = useState(null);
   const canVerify = role === "auditor" || role === "admin";
+  const canApplyAutopilot = role === "planner" || role === "admin";
 
   const load = useCallback(async () => {
     try {
@@ -45,6 +46,10 @@ export default function ScorecardPage({ role }) {
 
   const runVerify = async () => {
     try { setVerify(await api.auditVerify()); } catch (e) { setError(e.message); }
+  };
+  const applyAutopilot = async (action) => {
+    if (!window.confirm(`Apply autopilot to ${action.value}? This will write ${action.eligible_items} audited ML-acceptance decision(s).`)) return;
+    try { await api.applyAutopilot({ segment: action.segment, value: action.value }); await load(); } catch (e) { setError(e.message); }
   };
 
   const accepted = ledger.filter((r) => r.reason_code === "ML Output Formally Accepted").length;
@@ -87,6 +92,18 @@ export default function ScorecardPage({ role }) {
                   <span className="text-slate-400" data-testid="autopilot-empty">No segment has a negative-FVA streak yet.</span>
                 )}
               </div>
+              <DataTable testId="autopilot-actions-table" rows={auto.actions} empty="No autonomous action is eligible right now."
+                columns={[
+                  { key: "value", label: "Segment" },
+                  { key: "action", label: "Action", render: (r) => r.action.replace(/_/g, " ") },
+                  { key: "eligible_items", label: "Eligible", right: true },
+                  { key: "confidence", label: "Confidence", right: true, render: (r) => `${Math.round(r.confidence * 100)}%` },
+                  { key: "reason", label: "Reason" },
+                  { key: "apply", label: "", render: (r) => canApplyAutopilot && r.eligible_items > 0 ? (
+                    <button data-testid={`autopilot-apply-${r.id}`} onClick={() => applyAutopilot(r)}
+                      className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-[10px] font-semibold text-white">Apply</button>
+                  ) : <span className="text-slate-600">-</span> },
+                ]} />
               <DataTable rows={auto.per_cycle} empty="Per-cycle FVA appears once overrides from past cycles have actuals."
                 columns={[
                   { key: "cutoff", label: "Cycle" }, { key: "segment", label: "Segment" },

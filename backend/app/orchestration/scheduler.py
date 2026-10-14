@@ -13,7 +13,6 @@ TZ = "Europe/London"
 BUSY = "waiting: another run in progress"
 DEFAULTS = {
     "monthly_cycle": {"frequency": "monthly", "day": 2, "hour": 6, "minute": 0},
-    "amazon_daily": {"frequency": "daily", "day": None, "hour": 5, "minute": 0},
 }
 
 

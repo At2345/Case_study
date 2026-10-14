@@ -88,18 +88,23 @@ export const api = {
   commit: (cutoff) => request(`/api/v1/cycles/${cutoff}/commit`, { method: "POST" }),
   otif: (limit = 50) => request(`/api/v1/otif${qs({ limit })}`),
   disaggregate: (payload) => request("/api/v1/disaggregate", { method: "POST", body: payload }),
+  dynamicForecast: (itemId, method = "auto") => request(`/api/v1/forecast/items/${itemId}${qs({ method })}`),
+  agenticForecast: (itemId, method = "auto") => request(`/api/v1/forecast/items/${itemId}/agentic${qs({ method })}`),
   safetyStock: (params) => request(`/api/v1/inventory/safety-stock${qs(params)}`),
-  amazonPipeline: () => request("/api/v1/pipeline/amazon"),
   runs: () => request("/api/v1/cycles/runs"),
+  runDetail: (runId) => request(`/api/v1/cycles/runs/${runId}`),
+  rerunNode: (runId, node) => request("/api/v1/admin/cycles/rerun-node", { method: "POST", body: { run_id: runId, node } }),
+  riskFlags: () => request("/api/v1/supply/risk-flags"),
+  cycleAgentActions: () => request("/api/v1/cycles/agent-actions"),
   runCycle: () => request("/api/v1/admin/cycles/run", { method: "POST" }),
-  runAmazon: () => request("/api/v1/admin/pipeline/amazon", { method: "POST" }),
   reload: () => request("/api/v1/admin/reload", { method: "POST" }),
   autopilot: (segment = "channel") => request(`/api/v1/fva/autopilot${qs({ segment })}`),
+  applyAutopilot: (body) => request("/api/v1/fva/autopilot/apply", { method: "POST", body }),
   overrides: (limit = 200) => request(`/api/v1/overrides${qs({ limit })}`),
   auditVerify: () => request("/api/v1/audit/verify"),
   assistantHistory: () => request("/api/v1/assistant/history"),
   assistantClear: () => request("/api/v1/assistant/history", { method: "DELETE" }),
-  async assistantStream(question, onDelta) {
+  async assistantStream(question, onDelta, onActions) {
     const res = await request("/api/v1/assistant/stream", { method: "POST", body: { question }, raw: true });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -116,6 +121,7 @@ export const api = {
         const msg = JSON.parse(line.slice(5));
         if (msg.error) throw new ApiError(503, msg.error);
         if (msg.delta) onDelta(msg.delta);
+        if (msg.actions && onActions) onActions(msg.actions);
       }
     }
   },
@@ -125,10 +131,13 @@ export const api = {
   readNotification: (id) => request(`/api/v1/notifications/${id}/read`, { method: "POST" }),
   readAllNotifications: () => request("/api/v1/notifications/read-all", { method: "POST" }),
   scenarios: () => request("/api/v1/scenarios"),
+  generateScenario: (prompt) => request("/api/v1/scenarios/generate", { method: "POST", body: { prompt } }),
+  scenarioSuggestions: () => request("/api/v1/scenarios/suggestions"),
   createScenario: (body) => request("/api/v1/scenarios", { method: "POST", body }),
   updateScenario: (id, body) => request(`/api/v1/scenarios/${id}`, { method: "PUT", body }),
   deleteScenario: (id) => request(`/api/v1/scenarios/${id}`, { method: "DELETE" }),
   compareScenarios: (ids) => request(`/api/v1/scenarios/compare${qs({ ids: ids.join(",") })}`),
+  promoteScenario: (id) => request(`/api/v1/scenarios/${id}/promote`, { method: "POST" }),
   async briefing() {
     const res = await request("/api/v1/export/briefing.pdf", { raw: true });
     return res.blob();

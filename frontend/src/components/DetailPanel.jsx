@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Send, RefreshCw, BadgeCheck, Scale, Sparkles, Split } from "lucide-react";
+import { Send, RefreshCw, BadgeCheck, Scale, Sparkles, Split, TrendingUp, CheckCircle2, Circle } from "lucide-react";
 import { api } from "../services/api";
 import { fmtNum, fmtGbp, fmtGbpPlain, monthLabel } from "../lib/format";
 import PlanChart from "./PlanChart";
@@ -33,6 +33,13 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
   const [explain, setExplain] = useState(null);
   const [explaining, setExplaining] = useState(false);
   const [explainError, setExplainError] = useState(null);
+  const [forecastMethod, setForecastMethod] = useState("auto");
+  const [dynamicForecast, setDynamicForecast] = useState(null);
+  const [forecasting, setForecasting] = useState(false);
+  const [forecastError, setForecastError] = useState(null);
+  const [agentic, setAgentic] = useState(null);
+  const [agenticStage, setAgenticStage] = useState(null);
+  const [agenticError, setAgenticError] = useState(null);
   const canWrite = role === "planner" || role === "admin";
 
   const load = useCallback(async () => {
@@ -56,6 +63,11 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
     setMessage(null);
     setExplain(null);
     setExplainError(null);
+    setDynamicForecast(null);
+    setForecastError(null);
+    setAgentic(null);
+    setAgenticStage(null);
+    setAgenticError(null);
     load();
   }, [load]);
 
@@ -70,6 +82,41 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
       setExplaining(false);
     }
   };
+
+  const runDynamicForecast = async () => {
+    setForecasting(true);
+    setForecastError(null);
+    try {
+      setDynamicForecast(await api.dynamicForecast(itemId, forecastMethod));
+    } catch (e) {
+      setForecastError(e.message);
+    } finally {
+      setForecasting(false);
+    }
+  };
+
+  const AGENTIC_STAGES = ["research", "process", "forecast", "inform"];
+  const runAgenticForecast = async () => {
+    setAgenticError(null);
+    setAgentic(null);
+    setForecasting(true);
+    for (const stage of AGENTIC_STAGES) {
+      setAgenticStage(stage);
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    try {
+      const result = await api.agenticForecast(itemId, forecastMethod);
+      setAgentic(result);
+      setDynamicForecast(result.forecast);
+      setAgenticStage("done");
+    } catch (e) {
+      setAgenticError(e.message);
+      setAgenticStage(null);
+    } finally {
+      setForecasting(false);
+    }
+  };
+  const agenticWape = agentic ? (agentic.process.method_scores.find((m) => m.method === agentic.process.chosen_method) || {}).holdout_wape : null;
 
   const send = async (payload) => {
     setBusy(true);
@@ -104,6 +151,19 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
     send({ override_quantity: first.final, reason_code: reasonCodes.accept });
   };
 
+  const useDynamic = () => {
+    if (!dynamicForecast) return;
+    const q = dynamicForecast.rows[0].dynamic;
+    const code = reasonCodes.codes.includes("Commercial Intelligence (Account Feedback)")
+      ? "Commercial Intelligence (Account Feedback)"
+      : reasonCodes.codes[0];
+    send({
+      override_quantity: Math.round(q),
+      reason_code: code,
+      comment: `Dynamic CPU forecast (${dynamicForecast.method}) used for the first-month decision.`,
+    });
+  };
+
   if (loadError) return <div className="text-rose-400 text-xs p-5">{loadError}</div>;
   if (!detail) return <div className="text-slate-500 text-xs p-5 flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> Loading item...</div>;
 
@@ -117,7 +177,7 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
     <div className="space-y-5">
       <div className="border-b border-slate-800 pb-4">
         <div className="flex justify-between items-start">
-          <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Causal exception analysis</span>
+          <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Exception analysis</span>
           <span className="text-xs font-mono text-slate-400">Price: {fmtGbpPlain(item.sales_price)} / unit</span>
         </div>
         <h3 className="text-base font-bold text-white mt-1">{item.product_id} <span className="text-slate-500 text-xs font-normal">item {item.item_id} | {item.channel}</span></h3>
@@ -154,6 +214,86 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
 
       <TelemetryCard telemetry={telemetry} />
       <PlanChart history={history} plan={plan} />
+      <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 justify-between">
+          <div>
+            <div className="text-xs font-semibold text-white flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-indigo-400" /> Dynamic forecast</div>
+            <div className="text-[10px] text-slate-500">Recompute this item using local statistical methods. It does not change consensus until you record a decision.</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={forecastMethod} onChange={(e) => setForecastMethod(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200">
+              <option value="auto">Auto</option><option value="seasonal_naive">Seasonal naive</option><option value="ma3">MA3</option><option value="ma6">MA6</option><option value="ma12">MA12</option><option value="median6">Median6</option><option value="ses">SES</option><option value="croston_sba">Croston SBA</option><option value="combo_sn_ma12">Seasonal/MA combo</option>
+            </select>
+            <button type="button" data-testid="dynamic-forecast-btn" onClick={runDynamicForecast} disabled={forecasting}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 rounded-lg text-xs font-semibold text-white flex items-center gap-1.5">
+              {forecasting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />} Recompute
+            </button>
+            <button type="button" data-testid="agentic-forecast-btn" onClick={runAgenticForecast} disabled={forecasting}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5" /> {forecasting ? "Running..." : "Run agentic forecast"}
+            </button>
+          </div>
+        </div>
+        {agenticStage && (
+          <ol className="flex flex-wrap gap-2" data-testid="agentic-stages">
+            {AGENTIC_STAGES.map((s) => {
+              const idx = AGENTIC_STAGES.indexOf(s);
+              const cur = AGENTIC_STAGES.indexOf(agenticStage);
+              const done = agenticStage === "done" || idx < cur;
+              const active = agenticStage === s;
+              return (
+                <li key={s} className={`flex items-center gap-1.5 text-[11px] rounded-md px-2 py-1 border ${done ? "bg-emerald-950/40 border-emerald-800 text-emerald-200" : active ? "bg-indigo-950/40 border-indigo-700 text-indigo-200" : "bg-slate-950 border-slate-800 text-slate-500"}`}>
+                  {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : active ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Circle className="h-3.5 w-3.5" />}
+                  {s[0].toUpperCase() + s.slice(1)}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+        {agenticError && <div className="text-xs text-rose-400">{agenticError}</div>}
+        {forecastError && <div className="text-xs text-rose-400">{forecastError}</div>}
+        {agentic && (
+          <div data-testid="agentic-forecast-result" className="space-y-2">
+            <div className="text-[11px] text-slate-200 bg-indigo-950/40 border border-indigo-900 rounded-lg p-3 leading-relaxed">
+              <span className="block text-[10px] uppercase tracking-wider text-indigo-300 mb-1">{agentic.inform.source === "llm" ? "AI brief" : "Forecast brief"}</span>
+              {agentic.inform.text}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">Chosen method</span><strong className="text-indigo-200">{agentic.process.chosen_method}</strong></div>
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">Holdout WAPE</span><strong className="text-slate-200">{agenticWape === null || agenticWape === undefined ? "-" : `${(agenticWape * 100).toFixed(1)}%`}</strong></div>
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">First month</span><strong className="text-slate-200">{fmtNum(agentic.forecast.rows[0].dynamic)} units</strong></div>
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">Booked M1</span><strong className="text-slate-200">{fmtNum(agentic.research.booked_m1)} units</strong></div>
+            </div>
+            <ul className="text-[11px] text-slate-400 space-y-0.5">
+              <li>{agentic.process.chosen_reason}</li>
+              {agentic.research.promo_overlap.length > 0 && <li>{agentic.research.promo_overlap.length} promotion(s) overlap the forecast window.</li>}
+            </ul>
+          </div>
+        )}
+        {dynamicForecast && (
+          <div data-testid="dynamic-forecast-result" className="space-y-2">
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">Selected method</span><strong className="text-indigo-200">{dynamicForecast.method}</strong></div>
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">First month</span><strong className="text-slate-200">{fmtNum(dynamicForecast.rows[0].dynamic)} units</strong></div>
+              <div className="bg-slate-900 rounded-lg p-2"><span className="block text-[10px] text-slate-500">Delta vs current</span><strong className={dynamicForecast.rows[0].delta_to_current >= 0 ? "text-emerald-300" : "text-rose-300"}>{fmtNum(dynamicForecast.rows[0].delta_to_current)} units</strong></div>
+            </div>
+            <ul className="text-[11px] text-slate-400 space-y-0.5">{dynamicForecast.explanation.map((x) => <li key={x}>{x}</li>)}</ul>
+            {canWrite && !decision && (
+              <button type="button" data-testid="use-dynamic-forecast-btn" onClick={useDynamic} disabled={busy}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg">
+                Use as decision
+              </button>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-1 pr-2">Month</th><th className="py-1 pr-2 text-right">Current</th><th className="py-1 pr-2 text-right">Dynamic</th><th className="py-1 pr-2 text-right">Delta</th></tr></thead>
+                <tbody>{dynamicForecast.rows.slice(0, 6).map((r) => <tr key={r.month} className="border-b border-slate-800/60"><td className="py-1 pr-2 text-slate-300">{monthLabel(r.month)}</td><td className="py-1 pr-2 text-right font-mono text-slate-400">{fmtNum(r.current_final)}</td><td className="py-1 pr-2 text-right font-mono text-indigo-200">{fmtNum(r.dynamic)}</td><td className="py-1 pr-2 text-right font-mono text-slate-300">{fmtNum(r.delta_to_current)}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
       <PhasingTable phasing={phasing} />
       {floor && canWrite && !decision && (
         <div className="flex items-center justify-between gap-3 text-xs bg-amber-950/40 border border-amber-800 rounded-lg p-3 text-amber-200">

@@ -14,7 +14,6 @@ PyJWT>=2.8
 pymongo>=4.6
 # redis>=5.0
 # polars>=0.20
-duckdb>=1.0
 # Preview runtime is Python 3.11: LangGraph 1.x (the <0.5 pin only applies to a 3.9 interpreter)
 langgraph>=0.2
 reportlab>=4.0
@@ -22,3 +21,7 @@ python-dotenv>=1.0
 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
 emergentintegrations>=0.2
 # google-genai  (only for a direct GEMINI_API_KEY)
+# Local open-source LLM (LOCAL_MODEL=google/flan-t5-base): CPU-only wheels keep the install light
+transformers>=4.40
+sentencepiece>=0.1.99
+# torch CPU-only: pip install torch --index-url https://download.pytorch.org/whl/cpu

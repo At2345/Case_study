@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional
 
 log = logging.getLogger("sop.jobs")
 
-KINDS = ("monthly_cycle", "amazon_daily")
+KINDS = ("monthly_cycle",)
 PLANNERS = ["planner", "admin"]
 ADMINS = ["admin"]
 
@@ -38,16 +38,11 @@ class JobRunner:
     def _run(self, run_id: str, kind: str) -> None:
         status, error = "FAILED", None
         try:
-            if kind == "amazon_daily":
-                from app.orchestration.graph import amazon_daily
-                self.runs.step(run_id, {"node": "amazon_daily", "status": "ok", "detail": amazon_daily()})
-                status = "SUCCEEDED"
-            else:
-                from app.orchestration.graph import run_cycle
-                result = run_cycle(on_step=lambda s: self.runs.step(run_id, s))
-                status = result.get("status", "FAILED")
-                failed = [s for s in result.get("steps", []) if s["status"] == "failed"]
-                error = failed[0].get("error") if failed else None
+            from app.orchestration.graph import run_cycle
+            result = run_cycle(on_step=lambda s: self.runs.step(run_id, s))
+            status = result.get("status", "FAILED")
+            failed = [s for s in result.get("steps", []) if s["status"] == "failed"]
+            error = failed[0].get("error") if failed else None
             if status != "FAILED" and self.reload_fn is not None:
                 self.state["svc"] = self.reload_fn()
             self.runs.finish(run_id, status, **({"error": error} if error else {}))
@@ -64,7 +59,7 @@ class JobRunner:
     def _notify(self, run_id: str, kind: str, status: str, error: Optional[str]) -> None:
         if self.notes is None:
             return
-        label = "Monthly cycle" if kind == "monthly_cycle" else "Amazon daily pipeline"
+        label = "Monthly cycle"
         if status == "FAILED":
             self.notes.add(ADMINS, "error", f"{label} failed", error or "See the Operations tab.", "operations", run_id)
         elif kind == "monthly_cycle":

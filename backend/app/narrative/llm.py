@@ -48,6 +48,8 @@ class EmergentLlmClient:
 
 
 def client_from_env():
-    """Universal key first, then a direct Gemini key; None means deterministic narratives only."""
+    """Universal key first, then a direct Gemini key, then a local open-source model
+    (LOCAL_MODEL, e.g. google/flan-t5-base); None means deterministic narratives only."""
     from app.narrative.client import GeminiClient
-    return EmergentLlmClient.from_env() or GeminiClient.from_env()
+    from app.narrative.local_hf import LocalHfClient
+    return EmergentLlmClient.from_env() or GeminiClient.from_env() or LocalHfClient.from_env()

@@ -115,6 +115,33 @@ class TestExtended:
         assert r.status_code == 200
         d = r.json()
         assert "items_at_risk" in d and "total_penalty_gbp" in d
+        assert "by_customer" in d  # customer dimension does not break the channel view
+        if d["by_customer"]:
+            assert all("customer_id" in c and "penalty_gbp" in c for c in d["by_customer"])
+
+    def test_supply_risk_flags(self, tokens):
+        r = requests.get(f"{API}/supply/risk-flags", headers=h(tokens, "planner"), timeout=30)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["rows"] and all("channel" in f and "risk_type" in f and "count" in f for f in d["rows"])
+
+    def test_scenario_promote(self, tokens):
+        iid = getattr(pytest, "item_id", None) or 106205
+        s = requests.get(f"{API}/summary", headers=h(tokens, "planner"), timeout=30).json()
+        m1 = s["first_month"]
+        d = requests.get(f"{API}/items/{iid}", headers=h(tokens, "planner"), timeout=60).json()
+        cur = next(p for p in d["plan"] if p["month"] == m1)["final"]
+        body = {"name": "TEST promote", "description": "regression",
+                "edits": [{"type": "item", "item_id": iid, "month": m1, "qty": cur + 100}]}
+        created = requests.post(f"{API}/scenarios", headers=h(tokens, "planner"), json=body, timeout=30).json()
+        assert requests.post(f"{API}/scenarios/{created['id']}/promote", headers=h(tokens, "auditor"),
+                             timeout=30).status_code == 403
+        r = requests.post(f"{API}/scenarios/{created['id']}/promote", headers=h(tokens, "planner"), timeout=60)
+        assert r.status_code == 200, r.text
+        assert r.json()["promoted"] >= 1
+        ov = requests.get(f"{API}/overrides?limit=200", headers=h(tokens, "planner"), timeout=30).json()
+        assert any(o["item_id"] == iid and "TEST promote" in (o.get("planner_comment") or "") for o in ov)
+        requests.delete(f"{API}/scenarios/{created['id']}", headers=h(tokens, "planner"), timeout=30)
 
     def test_disaggregate(self, tokens):
         iid = getattr(pytest, "item_id", None)
@@ -133,16 +160,39 @@ class TestExtended:
                              json={"product_id": pid, "total": 10, "method": "foo"}, timeout=30)
         assert badm.status_code == 422
 
-    def test_amazon_pipeline_and_runs(self, tokens):
-        r = requests.get(f"{API}/pipeline/amazon", headers=h(tokens, "planner"), timeout=60)
-        assert r.status_code == 200
-        print("amazon meta:", json.dumps(r.json()["meta"])[:400])
+    def test_agentic_forecast(self, tokens):
+        iid = getattr(pytest, "item_id", None) or 106205
+        r = requests.get(f"{API}/forecast/items/{iid}/agentic", headers=h(tokens, "planner"), timeout=180)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["stages"] == ["research", "process", "forecast", "inform"]
+        assert d["research"]["history_points"] > 0 and "nonzero_share" in d["research"]
+        assert d["process"]["chosen_method"] and d["process"]["method_scores"]
+        assert d["forecast"]["rows"] and d["forecast"]["rows"][0]["dynamic"] is not None
+        assert d["inform"]["text"] and d["inform"]["source"] in ("llm", "deterministic")
+        assert d["actions"] and any(a["type"] == "use_dynamic_forecast" for a in d["actions"])
+        bad = requests.get(f"{API}/forecast/items/99999999/agentic", headers=h(tokens, "planner"), timeout=30)
+        assert bad.status_code == 404
+
+    def test_cycle_runs(self, tokens):
         runs = requests.get(f"{API}/cycles/runs", headers=h(tokens, "planner"), timeout=60)
         assert runs.status_code == 200 and "human_review" in runs.json()["nodes"]
+        if runs.json()["runs"]:
+            rid = runs.json()["runs"][0]["id"]
+            d = requests.get(f"{API}/cycles/runs/{rid}", headers=h(tokens, "planner"), timeout=30)
+            assert d.status_code == 200 and "steps" in d.json() and "quality_warnings" in d.json()
+
+    def test_rerun_node_rbac(self, tokens):
+        assert requests.post(f"{API}/admin/cycles/rerun-node", headers=h(tokens, "planner"),
+                             json={"run_id": "x", "node": "ingest_validate"}, timeout=30).status_code == 403
+        runs = requests.get(f"{API}/cycles/runs", headers=h(tokens, "admin"), timeout=30).json()["runs"]
+        rid = runs[0]["id"] if runs else "000000000000000000000000"
+        r = requests.post(f"{API}/admin/cycles/rerun-node", headers=h(tokens, "admin"),
+                          json={"run_id": rid, "node": "ingest_validate"}, timeout=60)
+        assert r.status_code in (404, 409)  # no failed node to re-run in a healthy cycle
 
     def test_run_cycle_rbac(self, tokens):
         assert requests.post(f"{API}/admin/cycles/run", headers=h(tokens, "planner"), timeout=30).status_code == 403
-        assert requests.post(f"{API}/admin/pipeline/amazon", headers=h(tokens, "auditor"), timeout=30).status_code == 403
 
     def test_briefing_and_csv(self, tokens):
         r = requests.get(f"{API}/export/briefing.pdf", headers=h(tokens, "planner"), timeout=120)

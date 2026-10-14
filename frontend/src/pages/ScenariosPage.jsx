@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Pencil, X, GitCompare } from "lucide-react";
+import { Plus, Trash2, Pencil, X, GitCompare, Sparkles } from "lucide-react";
 import { api } from "../services/api";
 import { fmtNum, fmtGbpPlain, monthLabel } from "../lib/format";
 import { Panel, ErrorNote } from "../components/ui";
@@ -75,6 +75,37 @@ function EditBuilder({ monthList, onAdd }) {
   );
 }
 
+function ScenarioGenerator({ onGenerated, initialPrompt, externalPrompt }) {
+  const [prompt, setPrompt] = useState(initialPrompt || "Create a conservative Amazon downside scenario for next month");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (initialPrompt) setPrompt(initialPrompt);
+  }, [initialPrompt]);
+  useEffect(() => {
+    if (externalPrompt) setPrompt(externalPrompt);
+  }, [externalPrompt]);
+  const submit = async (ev) => {
+    ev.preventDefault();
+    if (!prompt.trim()) return setError("Enter a scenario prompt.");
+    setBusy(true);
+    setError(null);
+    try { onGenerated(await api.generateScenario(prompt)); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <form onSubmit={submit} data-testid="scenario-generator" className="space-y-2 bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+      <div className="flex items-center gap-2 text-xs font-semibold text-white"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Generate scenario</div>
+      <textarea data-testid="scenario-prompt-input" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={500}
+        placeholder="e.g. 15% B2B upside for high-margin products next month" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200" />
+      <ErrorNote error={error} />
+      <button data-testid="scenario-generate-btn" type="submit" disabled={busy || !prompt.trim()}
+        className="w-full py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 rounded-lg text-xs font-semibold text-white">
+        {busy ? "Generating..." : "Generate editable draft"}
+      </button>
+    </form>
+  );
+}
+
 function ScenarioForm({ initial, monthList, onSave, onCancel }) {
   const [name, setName] = useState(initial ? initial.name : "");
   const [description, setDescription] = useState(initial ? initial.description : "");
@@ -88,13 +119,14 @@ function ScenarioForm({ initial, monthList, onSave, onCancel }) {
   return (
     <form onSubmit={submit} data-testid="scenario-form" className="space-y-3 bg-slate-950 border border-indigo-900/60 rounded-xl p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold text-white uppercase tracking-wider">{initial ? "Edit scenario" : "New scenario from the current consensus"}</h3>
+        <h3 className="text-xs font-bold text-white uppercase tracking-wider">{initial && initial.id ? "Edit scenario" : initial ? "Generated scenario draft" : "New scenario from the current consensus"}</h3>
         <button type="button" onClick={onCancel} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
       <input data-testid="scenario-name-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="e.g. B2B campaign upside"
         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
       <textarea data-testid="scenario-description-input" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500}
         placeholder="Assumption behind this version" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200" />
+      {initial && initial.explanation && <ul className="space-y-1 text-[11px] text-slate-400 bg-slate-900/70 border border-slate-800 rounded-lg p-2">{initial.explanation.map((x) => <li key={x}>{x}</li>)}</ul>}
       <EditBuilder monthList={monthList} onAdd={(e) => setEdits([...edits, e])} />
       <ul className="space-y-1" data-testid="scenario-edit-list">
         {edits.length === 0 && <li className="text-[11px] text-slate-500">No edits: the scenario equals the current consensus.</li>}
@@ -117,7 +149,7 @@ function Delta({ v, kind, good }) {
   return <span className={better ? "text-emerald-400" : "text-rose-400"}>{v > 0 ? "+" : "-"}{fmt(Math.abs(v), kind)}</span>;
 }
 
-function CompareTable({ data }) {
+function CompareTable({ data, canWrite, onPromote }) {
   const cols = data.columns;
   const channels = Object.keys(cols[0].metrics.by_channel);
   return (
@@ -130,6 +162,10 @@ function CompareTable({ data }) {
               <th key={c.id} className="py-2 pr-3 text-right align-bottom">
                 <span className={`block text-xs font-semibold ${c.id === "current" ? "text-slate-300" : "text-indigo-300"}`}>{c.name}</span>
                 {c.created_by && <span className="block text-[10px] text-slate-500 font-normal">by {c.created_by}, {c.edits.length} edit{c.edits.length === 1 ? "" : "s"}</span>}
+                {canWrite && c.id !== "current" && (
+                  <button type="button" data-testid={`promote-${c.id}`} onClick={() => onPromote(c)}
+                    className="mt-1 px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-[10px] font-semibold text-white">Promote to ledger</button>
+                )}
               </th>
             ))}
           </tr>
@@ -154,22 +190,28 @@ function CompareTable({ data }) {
           ))}
         </tbody>
       </table>
-      <p className="text-[10px] text-slate-500 mt-3">Green means better for the business: more value or margin, or less OTIF exposure, stock or holding cost. Safety stock scales with the first-month plan. Scenarios are a sandbox and are not written to the audit ledger.</p>
+      <p className="text-[10px] text-slate-500 mt-3">Green means better for the business: more value or margin, or less OTIF exposure, stock or holding cost. Safety stock scales with the first-month plan. Scenarios are a sandbox until you promote one: promotion writes the first-month quantities as audited overrides (reason "Commercial Intelligence (Account Feedback)").</p>
     </div>
   );
 }
 
-export default function ScenariosPage({ user, summary }) {
+export default function ScenariosPage({ user, summary, initialPrompt = "" }) {
   const [list, setList] = useState(null);
   const [selected, setSelected] = useState([]);
   const [compare, setCompare] = useState(null);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [generatorPrompt, setGeneratorPrompt] = useState("");
   const canWrite = user.role === "planner" || user.role === "admin";
   const monthList = months(summary && summary.first_month);
 
   const load = useCallback(() => api.scenarios().then(setList).catch((e) => setError(e.message)), []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    api.scenarioSuggestions().then((r) => setSuggestions(r.suggestions || [])).catch(() => {});
+  }, []);
   useEffect(() => {
     api.compareScenarios(selected).then(setCompare).catch((e) => setError(e.message));
   }, [selected, list]);
@@ -181,7 +223,7 @@ export default function ScenariosPage({ user, summary }) {
     setSelected([...selected, id]);
   };
   const save = async (body) => {
-    const s = editing === "new" ? await api.createScenario(body) : await api.updateScenario(editing.id, body);
+    const s = editing === "new" || !editing.id ? await api.createScenario(body) : await api.updateScenario(editing.id, body);
     setEditing(null);
     if (!selected.includes(s.id) && selected.length < 3) setSelected([...selected, s.id]);
     load();
@@ -191,6 +233,15 @@ export default function ScenariosPage({ user, summary }) {
     try { await api.deleteScenario(s.id); setSelected(selected.filter((x) => x !== s.id)); load(); } catch (e) { setError(e.message); }
   };
   const mine = (s) => s.created_by === user.username || user.role === "admin";
+  const promote = async (s) => {
+    if (!window.confirm(`Promote scenario "${s.name}" into audited decisions for ${monthLabel(summary && summary.first_month)}?`)) return;
+    try {
+      const r = await api.promoteScenario(s.id);
+      setError(null);
+      setNotice(`Promoted ${r.promoted} item decision(s) from "${s.name}" to the audit ledger.`);
+      load();
+    } catch (e) { setError(e.message); }
+  };
 
   return (
     <div className="px-8 py-6 grid grid-cols-1 xl:grid-cols-12 gap-6" data-testid="scenarios-page">
@@ -200,7 +251,23 @@ export default function ScenariosPage({ user, summary }) {
             <button data-testid="new-scenario-btn" onClick={() => setEditing("new")}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold flex items-center gap-1.5"><Plus className="h-3.5 w-3.5" /> New</button>
           )}>
-          {editing && <ScenarioForm key={editing === "new" ? "new" : editing.id} initial={editing === "new" ? null : editing} monthList={monthList} onSave={save} onCancel={() => setEditing(null)} />}
+          {canWrite && !editing && <ScenarioGenerator initialPrompt={initialPrompt} externalPrompt={generatorPrompt} onGenerated={(draft) => setEditing(draft)} />}
+          {!editing && suggestions.length > 0 && (
+            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2" data-testid="scenario-suggestions">
+              <div className="text-xs font-semibold text-white flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Suggested scenarios</div>
+              <div className="space-y-1.5">
+                {suggestions.map((s) => (
+                  <button key={s.id} type="button" data-testid={`scenario-suggestion-${s.id}`}
+                    onClick={() => setGeneratorPrompt(s.prompt)}
+                    className="w-full text-left bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg px-3 py-2">
+                    <span className="block text-[11px] font-semibold text-indigo-200">{s.title}</span>
+                    <span className="block text-[10px] text-slate-400 mt-0.5">{s.rationale}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {editing && <ScenarioForm key={editing === "new" ? "new" : editing.id || editing.name} initial={editing === "new" ? null : editing} monthList={monthList} onSave={save} onCancel={() => setEditing(null)} />}
           <ul className="space-y-2 mt-3" data-testid="scenario-list">
             {list && list.scenarios.length === 0 && <li className="text-xs text-slate-500">No scenarios yet for this cycle.</li>}
             {list && list.scenarios.map((s) => (
@@ -228,10 +295,11 @@ export default function ScenariosPage({ user, summary }) {
       </aside>
       <div className="xl:col-span-8 space-y-4">
         <ErrorNote error={error} />
+        {notice && <div className="bg-emerald-950/50 border border-emerald-800 text-emerald-200 rounded-lg px-4 py-3 text-xs">{notice}</div>}
         <Panel title="Side-by-side comparison" testId="scenario-compare-panel"
           subtitle={`${selected.length} of 3 selected, compared with the current consensus (planner decisions included).`}
           right={<GitCompare className="h-4 w-4 text-indigo-400" />}>
-          {compare ? <CompareTable data={compare} /> : <div className="text-xs text-slate-500">Loading...</div>}
+          {compare ? <CompareTable data={compare} canWrite={canWrite} onPromote={promote} /> : <div className="text-xs text-slate-500">Loading...</div>}
         </Panel>
       </div>
     </div>

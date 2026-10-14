@@ -49,11 +49,15 @@ def check(rows: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def from_plan(svc, cons, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """OTIF risk of a consensus frame (item_id, product_id, channel, month, consensus_qty) against the order book."""
+    """OTIF risk of a consensus frame (item_id, product_id, channel, month, consensus_qty) against the order book.
+
+    Channel-level rows keep the historical shape; `by_customer` splits each at-risk item-month's
+    uncovered units across the customers that booked it (only when the order book has customer ids).
+    """
     import pandas as pd
     ph = svc.phasing_items
     if ph.empty:
-        return {"terms": cfg, "rows": [], "total_penalty_gbp": 0.0}
+        return {"terms": cfg, "rows": [], "by_customer": [], "total_penalty_gbp": 0.0}
     ph = ph.assign(month=pd.to_datetime(ph["month"]).dt.strftime("%Y-%m-%d"))
     j = cons.merge(ph[["item_id", "month", "booked_qty"]], on=["item_id", "month"], how="inner")
     price = svc.triage["sales_price"]
@@ -61,4 +65,39 @@ def from_plan(svc, cons, cfg: Dict[str, Any]) -> Dict[str, Any]:
              "booked": float(r.booked_qty), "plan": float(r.consensus_qty), "sales_price": float(price.get(r.item_id, 0.0))}
             for r in j.itertuples()]
     risk = check(rows, cfg)
-    return {"terms": cfg, "rows": risk, "total_penalty_gbp": float(sum(r["penalty_gbp"] for r in risk))}
+    return {"terms": cfg, "rows": risk, "by_customer": _by_customer(svc, risk, cfg),
+            "total_penalty_gbp": float(sum(r["penalty_gbp"] for r in risk))}
+
+
+def _by_customer(svc, risk: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Per-customer share of each at-risk item-month: booked units by customer, shortfall allocated pro-rata."""
+    if not risk:
+        return []
+    try:
+        from app.data.loaders import load
+        from app.phasing.lag import QTY, prepare_lines
+        ob = load("orderbook")
+    except Exception:
+        return []
+    if ob.empty or ob["customer_id"].isna().all():
+        return []
+    lines = prepare_lines(ob)
+    booked = (lines[~lines["cancelled"]].groupby(["item_id", "mm", "customer_id"])[QTY].sum()
+              .rename("booked").reset_index())
+    booked["month"] = booked["mm"].dt.strftime("%Y-%m-%d")
+    out = []
+    for r in risk:
+        part = booked[(booked["item_id"] == r["item_id"]) & (booked["month"] == r["month"])]
+        total = float(part["booked"].sum())
+        if total <= 0:
+            continue
+        short_total = max(r["booked"] - r["plan"], 0.0)
+        t = terms_for(cfg, r["channel"])
+        for p in part.itertuples():
+            short_c = short_total * float(p.booked) / total
+            out.append({"item_id": r["item_id"], "product_id": r["product_id"], "channel": r["channel"],
+                        "month": r["month"], "customer_id": str(p.customer_id), "booked": float(p.booked),
+                        "plan": r["plan"], "fill_rate": min(r["plan"] / r["booked"], 1.0),
+                        "shortfall_units": float(short_c),
+                        "penalty_gbp": float(short_c * r["sales_price"] * t.penalty_pct)})
+    return sorted(out, key=lambda x: -x["penalty_gbp"])
