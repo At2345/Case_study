@@ -22,7 +22,8 @@ export default function PlanChart({ history, plan }) {
     final: plan.map((p) => [p.month, p.final]),
     consensus: plan.map((p) => [p.month, p.consensus]),
   };
-  const all = Object.values(points).flat().map((p) => p[1]).filter((v) => v !== null && v !== undefined);
+  const band = plan.filter((p) => p.p10 !== null && p.p10 !== undefined && p.p90 !== null && p.p90 !== undefined);
+  const all = [...Object.values(points).flat().map((p) => p[1]), ...band.map((p) => p.p90)].filter((v) => v !== null && v !== undefined);
   const max = Math.max(1, ...all);
   const x = (m) => PAD.l + (idx[m] / Math.max(1, months.length - 1)) * (W - PAD.l - PAD.r);
   const y = (v) => PAD.t + (1 - v / max) * (H - PAD.t - PAD.b);
@@ -40,11 +41,16 @@ export default function PlanChart({ history, plan }) {
         {ticks.map((m) => (
           <text key={m} x={x(m)} y={H - 6} textAnchor="middle" fontSize="9" fill="#64748b">{monthLabel(m)}</text>
         ))}
+        {band.length > 1 && (
+          <path data-testid="plan-band" fill="#818cf8" fillOpacity="0.15" stroke="none"
+            d={`${band.map((p, i) => `${i ? "L" : "M"}${x(p.month).toFixed(1)},${y(p.p90).toFixed(1)}`).join(" ")} ${[...band].reverse().map((p) => `L${x(p.month).toFixed(1)},${y(p.p10).toFixed(1)}`).join(" ")} Z`} />
+        )}
         {SERIES.map((s) => points[s.key].length > 0 && (
           <path key={s.key} d={path(points[s.key])} fill="none" stroke={s.color} strokeWidth="2" strokeDasharray={s.dash} />
         ))}
       </svg>
-      <div className="flex gap-4 text-[10px] text-slate-400 mt-1">
+      <div className="flex flex-wrap gap-4 text-[10px] text-slate-400 mt-1">
+        {band.length > 1 && <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-indigo-400/20" /> P10-P90 band</span>}
         {SERIES.map((s) => (
           <span key={s.key} className="flex items-center gap-1">
             <span className="inline-block w-3 h-0.5" style={{ background: s.color }} /> {s.label}

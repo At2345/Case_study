@@ -7,7 +7,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -21,7 +21,7 @@ from app.config import settings
 from app.evaluation.fva import override_fva
 from app.models.domain import AllocationRequest, LoginRequest, OverrideRequest
 from app.models.enums import ReasonCode, Role
-from app.narrative.client import GeminiClient
+from app.narrative.llm import client_from_env
 from app.narrative.narrator import Narrator
 from app.narrative.telemetry import build_telemetry
 from app.store.ledger import Ledger
@@ -49,6 +49,8 @@ def create_app(
     token_minutes: int = 480,
     reload_fn: Optional[Callable[[], DataService]] = None,
     narrator: Optional[Narrator] = None,
+    db: Optional[Any] = None,
+    llm: Optional[Any] = None,
 ) -> FastAPI:
     state = {"svc": service}
     failures: Dict[str, List[float]] = {}
@@ -61,6 +63,21 @@ def create_app(
         version="1.0.0",
     )
     app.state.narrator = narrator or Narrator(None, store_dir / "narratives.db")
+    runs = chats = None
+    if db is not None:
+        from app.store.runs import ChatStore, RunStore
+        runs, chats = RunStore(db), ChatStore(db)
+        runs.fail_stale()
+    metrics = Metrics()
+
+    @app.middleware("http")
+    async def observe(request: Request, call_next):
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        route = request.scope.get("route")
+        metrics.observe(request.method, getattr(route, "path", "unmatched"), response.status_code, time.perf_counter() - t0)
+        return response
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(cors_origins),
@@ -279,6 +296,8 @@ def create_app(
                                   "items": int(df["item_id"].nunique()), "path": str(path)})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+        if runs is not None:
+            runs.mark_committed(cutoff)
         return {"cutoff": cutoff, "path": str(path), "items": int(df["item_id"].nunique()), "rows": int(len(df)),
                 "committed_by": user["username"]}
 
@@ -295,7 +314,48 @@ def create_app(
         ok, bad = ledger.verify_chain()
         return {"ok": ok, "first_bad_id": bad}
 
+    @app.get("/api/v1/metrics")
+    def prometheus_metrics():
+        svc = state["svc"]
+        queue = len(svc.pending_review_ids(decisions()))
+        return Response(metrics.render({"sop_pending_exceptions": queue, "sop_queue_size": len(svc._review_ids)}),
+                        media_type="text/plain; version=0.0.4")
+
+    from app.api.extended import register
+    register(app, {"state": state, "ledger": ledger, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
+                   "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn})
     return app
+
+
+class Metrics:
+    """Minimal Prometheus exposition: request counts and latency histograms per route."""
+    BUCKETS = (0.05, 0.1, 0.25, 0.4, 1.0, 2.5, 10.0)
+
+    def __init__(self) -> None:
+        self.counts: Dict[tuple, int] = {}
+        self.hist: Dict[str, List[float]] = {}
+
+    def observe(self, method: str, path: str, status: int, seconds: float) -> None:
+        key = (method, path, status)
+        self.counts[key] = self.counts.get(key, 0) + 1
+        h = self.hist.setdefault(path, [0.0] * (len(self.BUCKETS) + 2))
+        for i, b in enumerate(self.BUCKETS):
+            if seconds <= b:
+                h[i] += 1
+        h[-2] += 1
+        h[-1] += seconds
+
+    def render(self, gauges: Dict[str, float]) -> str:
+        out = ["# TYPE sop_http_requests_total counter"]
+        out += [f'sop_http_requests_total{{method="{m}",path="{p}",status="{s}"}} {n}' for (m, p, s), n in self.counts.items()]
+        out.append("# TYPE sop_http_request_seconds histogram")
+        for p, h in self.hist.items():
+            out += [f'sop_http_request_seconds_bucket{{path="{p}",le="{b}"}} {int(h[i])}' for i, b in enumerate(self.BUCKETS)]
+            out += [f'sop_http_request_seconds_bucket{{path="{p}",le="+Inf"}} {int(h[-2])}',
+                    f'sop_http_request_seconds_count{{path="{p}"}} {int(h[-2])}', f'sop_http_request_seconds_sum{{path="{p}"}} {h[-1]:.4f}']
+        for k, v in gauges.items():
+            out += [f"# TYPE {k} gauge", f"{k} {v}"]
+        return "\n".join(out) + "\n"
 
 
 def create_default_app() -> FastAPI:
@@ -311,23 +371,21 @@ def create_default_app() -> FastAPI:
     def loader() -> DataService:
         return DataService.from_reports(settings.reports_dir)
 
-    # Choose ledger backend
+    db = None
     if settings.mongo_uri:
-        try:
-            from app.store.mongo_ledger import MongoLedger
-            ledger_impl: Ledger | Any = MongoLedger(settings.mongo_uri, settings.mongo_db)
-            log.info("Using MongoDB ledger at %s (db=%s)", settings.mongo_uri, settings.mongo_db)
-        except Exception as exc:
-            log.warning("MongoDB ledger unavailable (%s): falling back to SQLite", type(exc).__name__)
-            ledger_impl = Ledger(settings.store_dir / "ledger.db")
+        from app.store.mongo_ledger import MongoLedger
+        from app.store.runs import mongo_db
+        ledger_impl: Any = MongoLedger(settings.mongo_uri, settings.mongo_db)
+        db = mongo_db(settings.mongo_uri, settings.mongo_db, ledger_impl.client)
+        log.info("Using MongoDB ledger (db=%s)", settings.mongo_db)
     else:
         ledger_impl = Ledger(settings.store_dir / "ledger.db")
 
-    client = GeminiClient.from_env()
+    client = client_from_env()
     if client is None:
-        log.warning("GEMINI_API_KEY not set: narratives use the deterministic text")
+        log.warning("No LLM key set (EMERGENT_LLM_KEY / GEMINI_API_KEY): narratives use the deterministic text")
     return create_app(
         service=loader(), ledger=ledger_impl, users=users, secret=secret,
         store_dir=settings.store_dir, cors_origins=settings.cors_origins, token_minutes=settings.token_minutes,
-        reload_fn=loader, narrator=Narrator(client, settings.store_dir / "narratives.db"),
+        reload_fn=loader, narrator=Narrator(client, settings.store_dir / "narratives.db"), db=db, llm=client,
     )

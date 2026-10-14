@@ -1,4 +1,4 @@
-const BASE = (import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:8000";
+const BASE = (import.meta.env && (import.meta.env.REACT_APP_BACKEND_URL || import.meta.env.VITE_API_URL)) || "";
 const TOKEN_KEY = "sop_token";
 const USER_KEY = "sop_user";
 
@@ -86,6 +86,43 @@ export const api = {
   allocate: (payload) => request("/api/v1/allocation/simulate", { method: "POST", body: payload }),
   fva: (groupBy = "planner_id") => request(`/api/v1/fva${qs({ group_by: groupBy })}`),
   commit: (cutoff) => request(`/api/v1/cycles/${cutoff}/commit`, { method: "POST" }),
+  otif: (limit = 50) => request(`/api/v1/otif${qs({ limit })}`),
+  disaggregate: (payload) => request("/api/v1/disaggregate", { method: "POST", body: payload }),
+  safetyStock: (params) => request(`/api/v1/inventory/safety-stock${qs(params)}`),
+  amazonPipeline: () => request("/api/v1/pipeline/amazon"),
+  runs: () => request("/api/v1/cycles/runs"),
+  runCycle: () => request("/api/v1/admin/cycles/run", { method: "POST" }),
+  runAmazon: () => request("/api/v1/admin/pipeline/amazon", { method: "POST" }),
+  reload: () => request("/api/v1/admin/reload", { method: "POST" }),
+  autopilot: (segment = "channel") => request(`/api/v1/fva/autopilot${qs({ segment })}`),
+  overrides: (limit = 200) => request(`/api/v1/overrides${qs({ limit })}`),
+  auditVerify: () => request("/api/v1/audit/verify"),
+  assistantHistory: () => request("/api/v1/assistant/history"),
+  assistantClear: () => request("/api/v1/assistant/history", { method: "DELETE" }),
+  async assistantStream(question, onDelta) {
+    const res = await request("/api/v1/assistant/stream", { method: "POST", body: { question }, raw: true });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split("\n\n");
+      buf = events.pop();
+      for (const ev of events) {
+        const line = ev.trim();
+        if (!line.startsWith("data:")) continue;
+        const msg = JSON.parse(line.slice(5));
+        if (msg.error) throw new ApiError(503, msg.error);
+        if (msg.delta) onDelta(msg.delta);
+      }
+    }
+  },
+  async briefing() {
+    const res = await request("/api/v1/export/briefing.pdf", { raw: true });
+    return res.blob();
+  },
   async exportDraft() {
     const res = await request("/api/v1/export/consensus", { raw: true });
     return res.blob();

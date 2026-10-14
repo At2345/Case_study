@@ -5,6 +5,10 @@ import SummaryCards from "./components/SummaryCards";
 import QualityBanner from "./components/QualityBanner";
 import ExceptionTable from "./components/ExceptionTable";
 import DetailPanel from "./components/DetailPanel";
+import ScorecardPage from "./pages/ScorecardPage";
+import SupplyRiskPage from "./pages/SupplyRiskPage";
+import OperationsPage from "./pages/OperationsPage";
+import CopilotPage from "./pages/CopilotPage";
 import { api, getStoredUser, getToken, onUnauthorized } from "./services/api";
 
 const DEFAULT_FILTERS = { state: "EXCEPTION_REVIEW", channel: "", risk_type: "", pending: "", limit: 50, offset: 0 };
@@ -20,6 +24,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [committing, setCommitting] = useState(false);
+  const [page, setPage] = useState("workbench");
 
   const logout = useCallback(() => {
     api.logout();
@@ -68,19 +73,22 @@ export default function App() {
     refreshQueue();
   };
 
-  const exportDraft = async () => {
+  const download = async (fetchBlob, name) => {
     try {
-      const blob = await api.exportDraft();
+      const blob = await fetchBlob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `consensus_${summary ? summary.cutoff : "draft"}_draft.csv`;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
       setError(e.message);
     }
   };
+  const cutoff = summary ? summary.cutoff : "draft";
+  const exportDraft = () => download(api.exportDraft, `consensus_${cutoff}_draft.csv`);
+  const briefing = () => download(api.briefing, `sop_briefing_${cutoff}.pdf`);
 
   const commit = async () => {
     if (!summary || !window.confirm("Commit the consensus plan? Decisions will be closed for this cycle.")) return;
@@ -100,12 +108,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      <Header summary={summary} user={user} onExport={exportDraft} onCommit={commit} onLogout={logout} committing={committing} />
+      <Header summary={summary} user={user} onExport={exportDraft} onCommit={commit} onLogout={logout} committing={committing}
+        page={page} onPage={setPage} onBriefing={briefing} />
       {summary && <QualityBanner warnings={summary.quality_warnings} />}
       {notice && <div className="mx-8 mt-4 bg-emerald-950/50 border border-emerald-800 text-emerald-200 rounded-lg px-4 py-3 text-xs">{notice}</div>}
       {error && <div role="alert" className="mx-8 mt-4 bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-4 py-3 text-xs">{error}</div>}
-      <SummaryCards summary={summary} />
-      <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {page === "scorecard" && <ScorecardPage role={user.role} />}
+      {page === "supply" && <SupplyRiskPage />}
+      {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} />}
+      {page === "copilot" && <CopilotPage />}
+      {page === "workbench" && <SummaryCards summary={summary} />}
+      {page === "workbench" && <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
         <ExceptionTable data={queue} filters={filters} onFilters={setFilters} selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
         <section className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-xl p-5">
           {selectedId !== null && reasonCodes ? (
@@ -117,7 +130,7 @@ export default function App() {
             All decisions are written to the insert-only audit ledger and feed the rolling FVA scorecard.
           </div>
         </section>
-      </main>
+      </main>}
     </div>
   );
 }

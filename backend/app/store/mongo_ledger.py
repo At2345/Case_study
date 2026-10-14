@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -25,35 +26,43 @@ class MongoLedger:
         self._ASC, self._DESC = ASCENDING, DESCENDING
         self.client = MongoClient(uri)
         self.db = self.client[db_name]
-        self.overrides = self.db["overrides"]
-        self.commits = self.db["commits"]
-        self.overrides.create_index([("cutoff", self._ASC), ("target_month", self._ASC), ("item_id", self._ASC), ("_id", self._ASC)])
-        self.commits.create_index([( "cutoff", self._ASC)], unique=True)
+        self._ov = self.db["overrides"]
+        self._cm = self.db["commits"]
+        self._lock = threading.Lock()
+        self._ov.create_index([("cutoff", self._ASC), ("target_month", self._ASC), ("item_id", self._ASC), ("_id", self._ASC)])
+        self._cm.create_index([("cutoff", self._ASC)], unique=True)
+        self._ensure_insert_only_role(db_name)
+
+    def _ensure_insert_only_role(self, db_name: str) -> None:
+        """NF-03: the application role may only insert and read the ledger collections (best effort; needs auth enabled to bite)."""
+        privileges = [{"resource": {"db": db_name, "collection": c}, "actions": ["insert", "find"]} for c in ("overrides", "commits")]
+        try:
+            if not self.db.command("rolesInfo", "ledgerAppendOnly").get("roles"):
+                self.db.command("createRole", "ledgerAppendOnly", privileges=privileges, roles=[])
+        except Exception:
+            pass
 
     def _append(self, coll, fields: List[str], rec: Dict[str, Any]) -> Any:
         payload = {f: rec.get(f) for f in fields}
-        last = coll.find_one(sort=[("_id", self._DESC)])
-        prev = last.get("row_hash") if last else GENESIS
-        digest = _row_hash(prev, payload)
-        doc = {**payload, "prev_hash": prev, "row_hash": digest}
-        res = coll.insert_one(doc)
-        return res.inserted_id
+        with self._lock:
+            last = coll.find_one(sort=[("_id", self._DESC)])
+            prev = last.get("row_hash") if last else GENESIS
+            doc = {**payload, "prev_hash": prev, "row_hash": _row_hash(prev, payload)}
+            return str(coll.insert_one(doc).inserted_id)
 
     def append_override(self, rec: Dict[str, Any]) -> int:
         reason = rec.get("reason_code")
         if reason is None or not str(reason).strip():
             raise ValueError("Reason code is required.")
-        self._append(self.overrides, OVERRIDE_FIELDS, rec)
-        return 1
+        return self._append(self._ov, OVERRIDE_FIELDS, rec)
 
     def append_commit(self, rec: Dict[str, Any]) -> int:
         try:
-            self._append(self.commits, COMMIT_FIELDS, rec)
+            return self._append(self._cm, COMMIT_FIELDS, rec)
         except Exception as exc:
             if "E11000" in str(exc):
                 raise ValueError(f"cutoff {rec.get('cutoff')} already committed") from exc
             raise
-        return 1
 
     def overrides(
         self, cutoff: Optional[str] = None, item_id: Optional[int] = None, planner_id: Optional[str] = None,
@@ -66,10 +75,10 @@ class MongoLedger:
             filt["item_id"] = item_id
         if planner_id is not None:
             filt["planner_id"] = planner_id
-        cur = self.overrides.find(filt, sort=[("_id", self._ASC)])
+        cur = self._ov.find(filt, sort=[("_id", self._ASC)])
         if limit:
             cur = cur.limit(int(limit))
-        return [{k: v for k, v in d.items() if k != "_id"} for d in cur]
+        return [{"id": str(d["_id"]), **{k: v for k, v in d.items() if k != "_id"}} for d in cur]
 
     def latest_by_item(self, cutoff: str, target_month: str) -> Dict[int, Dict[str, Any]]:
         pipeline = [
@@ -78,7 +87,7 @@ class MongoLedger:
             {"$group": {"_id": "$item_id", "doc": {"$first": "$$ROOT"}}},
         ]
         out: Dict[int, Dict[str, Any]] = {}
-        for g in self.overrides.aggregate(pipeline):
+        for g in self._ov.aggregate(pipeline):
             d = g["doc"]
             d.pop("_id", None)
             out[int(g["_id"])] = d
@@ -91,7 +100,7 @@ class MongoLedger:
             {"$group": {"_id": {"item_id": "$item_id", "target_month": "$target_month"}, "doc": {"$first": "$$ROOT"}}},
         ]
         out: Dict[Tuple[int, str], Dict[str, Any]] = {}
-        for g in self.overrides.aggregate(pipeline):
+        for g in self._ov.aggregate(pipeline):
             d = g["doc"]
             d.pop("_id", None)
             key = (int(g["_id"]["item_id"]), g["_id"]["target_month"])
@@ -99,18 +108,18 @@ class MongoLedger:
         return out
 
     def commit_for(self, cutoff: str) -> Optional[Dict[str, Any]]:
-        d = self.commits.find_one({"cutoff": cutoff})
+        d = self._cm.find_one({"cutoff": cutoff})
         if not d:
             return None
         d.pop("_id", None)
         return d
 
-    def verify_chain(self) -> Tuple[bool, Optional[int]]:
-        for coll, fields in ((self.overrides, OVERRIDE_FIELDS), (self.commits, COMMIT_FIELDS)):
+    def verify_chain(self) -> Tuple[bool, Optional[str]]:
+        for coll, fields in ((self._ov, OVERRIDE_FIELDS), (self._cm, COMMIT_FIELDS)):
             prev = GENESIS
             for d in coll.find({}, sort=[("_id", self._ASC)]):
                 payload = {f: d.get(f) for f in fields}
                 if d.get("prev_hash") != prev or _row_hash(prev, payload) != d.get("row_hash"):
-                    return False, None
+                    return False, str(d["_id"])
                 prev = d.get("row_hash")
         return True, None

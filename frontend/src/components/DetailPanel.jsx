@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Send, RefreshCw, BadgeCheck, Scale, Sparkles } from "lucide-react";
+import { Send, RefreshCw, BadgeCheck, Scale, Sparkles, Split } from "lucide-react";
 import { api } from "../services/api";
 import { fmtNum, fmtGbp, fmtGbpPlain, monthLabel } from "../lib/format";
 import PlanChart from "./PlanChart";
 import TelemetryCard from "./TelemetryCard";
 import AllocationModal from "./AllocationModal";
 import PhasingTable from "./PhasingTable";
+import DisaggregationModal from "./DisaggregationModal";
 
 export const FLOOR_REASON = "Order Book Floor Applied";
 
@@ -28,6 +29,7 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
   const [showAllocation, setShowAllocation] = useState(false);
+  const [showSplit, setShowSplit] = useState(false);
   const [explain, setExplain] = useState(null);
   const [explaining, setExplaining] = useState(false);
   const [explainError, setExplainError] = useState(null);
@@ -119,7 +121,7 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
         </div>
         <h3 className="text-base font-bold text-white mt-1">{item.product_id} <span className="text-slate-500 text-xs font-normal">item {item.item_id} | {item.channel}</span></h3>
         <p className="text-xs text-slate-300 mt-2 bg-slate-950 p-3 rounded-lg border border-slate-800 leading-relaxed">{item.narrative}</p>
-        <button type="button" onClick={askExplanation} disabled={explaining}
+        <button type="button" data-testid="explain-ai-btn" onClick={askExplanation} disabled={explaining}
           className="mt-2 text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-50 flex items-center gap-1.5">
           <Sparkles className="h-3.5 w-3.5" /> {explaining ? "Generating..." : "Explain with AI"}
         </button>
@@ -155,17 +157,23 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
       {floor && canWrite && !decision && (
         <div className="flex items-center justify-between gap-3 text-xs bg-amber-950/40 border border-amber-800 rounded-lg p-3 text-amber-200">
           <span>The order book already holds <strong>{fmtNum(floor)}</strong> units for {monthLabel(plan[0].month)}, above the plan of {fmtNum(plan[0].final)}.</span>
-          <button type="button" onClick={raiseToOrderBook} disabled={busy}
+          <button type="button" data-testid="raise-to-orderbook-btn" onClick={raiseToOrderBook} disabled={busy}
             className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold rounded-lg">
             Raise plan to order book
           </button>
         </div>
       )}
-      <button type="button" onClick={() => setShowAllocation(true)}
+      <button type="button" data-testid="open-allocation-btn" onClick={() => setShowAllocation(true)}
         className="text-xs text-indigo-300 hover:text-indigo-200 flex items-center gap-1.5">
         <Scale className="h-3.5 w-3.5" /> Simulate a supply shortage for this product
       </button>
       {showAllocation && <AllocationModal productId={item.product_id} onClose={() => setShowAllocation(false)} />}
+      <button type="button" data-testid="open-disaggregation-btn" onClick={() => setShowSplit(true)}
+        className="text-xs text-indigo-300 hover:text-indigo-200 flex items-center gap-1.5">
+        <Split className="h-3.5 w-3.5" /> Set a product total and split it across channels
+      </button>
+      {showSplit && <DisaggregationModal productId={item.product_id} month={first.month} reasonCodes={reasonCodes} canWrite={canWrite}
+        onClose={() => setShowSplit(false)} onApplied={() => { load(); onChanged(); }} />}
 
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
@@ -214,11 +222,11 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
           {error && <div role="alert" className="text-rose-400 text-xs">{error}</div>}
           {message && <div className="text-emerald-400 text-xs">{message}</div>}
           <div className="flex gap-2">
-            <button type="submit" disabled={busy}
+            <button type="submit" data-testid="commit-decision-btn" disabled={busy}
               className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg flex items-center justify-center gap-2">
               {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Commit decision
             </button>
-            <button type="button" onClick={accept} disabled={busy}
+            <button type="button" data-testid="accept-ml-btn" onClick={accept} disabled={busy}
               className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-semibold rounded-lg">
               Accept ML plan
             </button>

@@ -34,6 +34,29 @@ def _month(ts: Any) -> str:
     return pd.Timestamp(ts).strftime("%Y-%m-%d")
 
 
+def _read(path: Path, kind: str):
+    if not path.exists():
+        return None
+    if kind == "parquet":
+        return pd.read_parquet(path)
+    if kind == "csv":
+        return pd.read_csv(path)
+    return json.loads(path.read_text())
+
+
+def load_extras(reports_dir: Path) -> Dict[str, Any]:
+    """Optional Phase 2-3 artifacts; each one is None until its pipeline step has run."""
+    r = Path(reports_dir)
+    return {
+        "bands": _read(r / "quantile_bands.parquet", "parquet"),
+        "coverage": _read(r / "quantile_coverage.csv", "csv"),
+        "safety": _read(r / "safety_stock.parquet", "parquet"),
+        "safety_meta": _read(r / "safety_stock_meta.json", "json"),
+        "amazon_meta": _read(r / "amazon_pipeline_meta.json", "json"),
+        "weekly_risk": _read(r / "amazon_weekly_risk.parquet", "parquet"),
+    }
+
+
 class DataService:
     TELEMETRY = ["glance_mom_pct", "p70_gap_pct", "on_hand", "open_po", "oos_rate_28d", "weeks_of_cover"]
 
@@ -45,7 +68,14 @@ class DataService:
         meta: Dict[str, Any],
         phasing_items: Optional[pd.DataFrame] = None,
         phasing_profile: Optional[pd.DataFrame] = None,
+        extras: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self.extras = extras or {}
+        bands = self.extras.get("bands")
+        self._bands = {} if bands is None else {
+            (int(i), _month(d)): (float(lo), float(hi)) for i, d, lo, hi in zip(bands["item_id"], bands["date"], bands["p10"], bands["p90"])}
+        self._sigma = {} if bands is None else {
+            (int(i), _month(d)): float(s) for i, d, s in zip(bands["item_id"], bands["date"], bands["sigma"])}
         self.triage = triage.set_index("item_id", drop=False)
         self.phasing_items = phasing_items if phasing_items is not None else pd.DataFrame(
             columns=["item_id", "month", "booked_qty", "booked_shifted_qty", "carry_in_qty", "shifted_in_qty"])
@@ -110,7 +140,7 @@ class DataService:
         items_path, profile_path = reports_dir / "phasing_items.parquet", reports_dir / "phasing_profile.csv"
         phasing_items = pd.read_parquet(items_path) if items_path.exists() else None
         phasing_profile = pd.read_csv(profile_path) if profile_path.exists() else None
-        return cls(triage, monthly, ts, meta, phasing_items, phasing_profile)
+        return cls(triage, monthly, ts, meta, phasing_items, phasing_profile, extras=load_extras(reports_dir))
 
     # ------------------------------------------------------------------ lookups
     def has_item(self, item_id: int) -> bool:
@@ -213,7 +243,9 @@ class DataService:
         plan = []
         for _, m in self._monthly_by_item.get(item_id, pd.DataFrame()).iterrows():
             d = decided.get(m["month"])
+            band = self._bands.get((item_id, m["month"]), (None, None))
             plan.append({
+                "p10": band[0], "p90": band[1],
                 "month": m["month"], "baseline": clean(m["baseline_qty"]), "ml": clean(m["ml_prediction"]),
                 "final": clean(m["final_qty"]), "source": m["source"],
                 "consensus": d["submitted_quantity"] if d else clean(m["final_qty"]),
@@ -232,6 +264,17 @@ class DataService:
             "telemetry": {k: clean(r[k]) for k in self.TELEMETRY if k in r.index},
             "decision": first,
         }
+
+    def sigma(self, item_id: int, month: str) -> Optional[float]:
+        return self._sigma.get((item_id, month))
+
+    def product_items(self, product_id: str) -> pd.DataFrame:
+        return self.triage[(self.triage["product_id"] == product_id) & self.triage["in_scope"]]
+
+    def top_queue(self, n: int = 20) -> List[Dict[str, Any]]:
+        ids = self._filter_index.loc[self._filter_index["state"] == "EXCEPTION_REVIEW", "item_id"].head(n)
+        keys = ["item_id", "product_id", "channel", "abc_category", "baseline_h", "final_h", "value_delta_gbp", "risk_type", "risk_flags"]
+        return [{k: self._static[int(i)][k] for k in keys} for i in ids]
 
     # ------------------------------------------------------------------ order-book phasing
     def _probs(self, channel: str) -> Tuple[float, float, float]:

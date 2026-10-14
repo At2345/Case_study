@@ -16,8 +16,8 @@ class Settings:
     jwt_secret: str = os.getenv("JWT_SECRET", "")
     token_minutes: int = int(os.getenv("TOKEN_MINUTES", "480"))
     cors_origins: tuple = tuple(o for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o)
-    mongo_uri: str = os.getenv("MONGO_URI", "")
-    mongo_db: str = os.getenv("MONGO_DB", "sop")
+    mongo_uri: str = os.getenv("MONGO_URL", os.getenv("MONGO_URI", ""))
+    mongo_db: str = os.getenv("DB_NAME", os.getenv("MONGO_DB", "sop"))
     demo_mode: bool = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
