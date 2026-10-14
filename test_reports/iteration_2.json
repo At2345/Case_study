@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 2 tested Scheduled Runs, in-app Notifications and What-if Scenarios, plus a regression pass, against the public URL. New pytest file /app/backend/tests/test_ops_scenarios.py has 29 tests. 28 passed. The 1 failure was not a bug: the main agent had left amazon_daily at 13:00, and it was restored to 05:00 during the run. Regression suite test_sop_api.py: 18/18 passed. Unit tests tests/test_scheduling_scenarios.py: 9/9 passed. The scheduler fired on its own: amazon_daily set to 13:50 BST started a run with started_by=scheduler at 12:50:25Z, and next_run moved forward by one day. UI checks done: bell for all 3 roles (auditor gets no queue notifications); unread badge; clicking an item marks it read and goes to the workbench; 'Mark all read'; an outside click closes the panel. Admin 'Run monthly cycle' reached AWAITING_REVIEW in about 25s and created a new unread notification for danny and admin. Admin schedule edit, pause and 422 checks work, and the Next run text updates. Planner and auditor see the schedules read-only. Scenarios: create with pct/channel, pct/product/month and item edits; remove an edit; save auto-selects the scenario; a 4th selection shows the error; the compare table shows green/red deltas; edit and delete (with confirm) work; auditor can view and compare only. Regression: workbench queue, an override with a reason code (106205=1700), the briefing PDF download and the co-pilot all work. I fixed 2 frontend bugs (see updated_files). Schedules are restored, TEST_ scenarios are deleted, and the consensus was not committed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST/PUT /api/v1/scenarios", "issue": "A scoped % edit with an unknown product_id (e.g. NOPE_999) or unknown channel (e.g. 'Nonexistent') is accepted with 200 and silently does nothing. validate_edits only checks that a value is present."},
+      {"endpoint": "JobRunner / runs store", "issue": "A run marked FAILED with 'server restarted during the run' (run 6acf71e41c903c7d748b41a3) did not create an admin error notification. Only JobRunner._notify sends one, so runs failed by the stale-run cleanup never alert admins."},
+      {"endpoint": "Scheduler.tick", "issue": "While another job is busy, a due schedule records 'skipped: another run in progress' every 30s poll without moving next_run_at. The history (last 10) can fill with skip entries, and the job fires late once the other job finishes. Pick one: skip to the next slot, or record the skip once."},
+      {"endpoint": "PUT /api/v1/admin/schedules/{job}", "issue": "The 422 message is raw pydantic text ('Input should be less than or equal to 28') and is shown as-is in the UI."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ScenariosPage ScenarioForm", "issue": "FIXED BY TESTER: the edit buttons stay visible while the form is open. Clicking edit on scenario B while editing A kept A's name and edits but saved to B's id, so B was silently overwritten. Fixed by adding key={editing id} to ScenarioForm. Verified: switching now loads B.", "selector": "[data-testid^=scenario-edit-]", "priority": "HIGH"},
+      {"component": "CopilotPage", "issue": "FIXED BY TESTER: if the user asked a question before the history request returned, setMessages(h.messages) replaced the optimistic messages. The streamed answer was then appended to the user message, giving one bubble with the question and answer joined. The backend stored both correctly. Fixed so history only loads when no local messages exist.", "selector": "[data-testid=copilot-messages]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Admin runs monthly cycle", "issue": "The admin's own bell badge only updates on the next 30s poll after the run finishes. Calling load() on run completion, or exposing a refresh hook, would make it immediate.", "affected_selectors": ["[data-testid=notification-unread-count]"]}
+    ],
+    "design_issues": [
+      {"screen": "Notification panel", "issues": ["Timestamps use the browser's local time (toLocaleString without a timeZone), while the schedules show UK time. Use Europe/London for consistency.", "The body shows raw ISO dates ('Cycle 2026-02-01 ... planning from 2026-03-01'). Use month labels such as 'Feb 26'."]},
+      {"screen": "Scenarios", "issues": ["Pluralization reads '1 edits' in the list and compare header.", "'Add edit' with Product scope and an empty product does nothing and shows no feedback.", "The product input is free text with no suggestions or validation."]},
+      {"screen": "Operations schedules", "issues": ["Rows are sorted by job key, so the Amazon daily pipeline appears above the Monthly cycle. Consider listing the monthly cycle first."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ops_scenarios.py", "/app/backend/tests/test_sop_api.py", "/app/test_reports/pytest/pytest_iter2.xml"],
+  "action_items": [
+    "Validate the channel (allowed set) and product_id (exists in triage) for scoped pct edits; return 422 otherwise",
+    "Send an admin error notification when the startup cleanup marks a run FAILED ('server restarted during the run')",
+    "Decide how the scheduler handles a busy job: move next_run_at forward, or record the skip once instead of every 30s",
+    "Show a friendly schedule validation message instead of raw pydantic text",
+    "Minor UX: format notification timestamps in UK time and month labels; fix '1 edits'; give feedback for an empty product; refresh the bell after a manual run finishes"
+  ],
+  "critical_code_review_comments": [
+    "ops_routes.update_scenario and delete_scenario call scenarios.update/delete directly. This is safe only because owned() calls need() first, so it is fragile if refactored.",
+    "ScheduleStore.update recomputes next_run_at from now on every save, even when only 'enabled' changes. That is fine, but re-enabling a monthly job just after its slot passed will skip that month.",
+    "engine._safety scales the safety stock linearly with the month-1 plan ratio. Setting 103125 to 5633 (about 6x) adds about 9.6k safety-stock units, more than the 4.7k unit change. Mathematically consistent with the band-ratio model, but planners may find it surprising. Consider explaining or capping it.",
+    "jobs._notify reads state['svc'] after the lock is released. A concurrent run could swap svc between finish and notify, so the summary numbers could come from the wrong run (low risk)."
+  ],
+  "updated_files": ["/app/frontend/src/pages/ScenariosPage.jsx", "/app/frontend/src/pages/CopilotPage.jsx", "/app/backend/tests/test_ops_scenarios.py"],
+  "success_rate": {"backend": "100% of requested behaviour (28/29 passed; the 1 failure came from the schedule state the main agent left, restored)", "frontend": "100% of requested flows after 2 tester fixes"},
+  "seed_data_creation": "One more admin monthly cycle run (AWAITING_REVIEW, 12:51Z), so danny and admin each got a new 'Exception queue is ready' notification. Two scheduler-started amazon_daily runs (one by the main agent, one by the tester). Override 106205=1700 (Commercial Intelligence) re-recorded by danny. All of danny's notifications and admin's are marked read. TEST_ scenarios deleted; 'Floor 103125' and 'B2B +10%' kept. Danny's co-pilot history cleared.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: REACT_APP_BACKEND_URL=<url> python -m pytest backend/tests/test_ops_scenarios.py backend/tests/test_sop_api.py. test_ops_scenarios marks admin notifications read, briefly changes the schedules and restores them, and cleans up TEST_ scenarios. test_list_defaults expects amazon_daily at 05:00 and monthly_cycle on day 2 at 06:00. Do not commit the consensus. The Login form has no data-testids; use #username/#password/button[type=submit].",
+  "test_credentials": "From /app/memory/test_credentials.md: danny/PlannerPass2026!, admin/AdminPass2026!, auditor/AuditorPass2026! (all valid)",
+  "rca of the issue": "Scenario overwrite: ScenarioForm initialises useState from the initial prop only on mount. With no key, React reuses the same instance when editing switches from A to B, so the form keeps A's data. save() then PUTs to editing.id, which is B. Co-pilot merge: the history GET and the stream POST race. The backend saves the user message before the GET returns, so the history holds only [user]. setMessages replaces the optimistic pair, and onDelta then rewrites the last element (the user message) as the assistant message with the user text plus the answer."
+}

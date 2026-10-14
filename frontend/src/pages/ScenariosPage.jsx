@@ -25,14 +25,17 @@ const EMPTY_EDIT = { type: "pct", scope: "channel", value: CHANNELS[0], pct: 10,
 
 function EditBuilder({ monthList, onAdd }) {
   const [e, setE] = useState(EMPTY_EDIT);
+  const [hint, setHint] = useState(null);
   const set = (k) => (ev) => setE({ ...e, [k]: ev.target.value });
   const input = "bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200";
   const add = () => {
+    setHint(null);
     if (e.type === "pct") {
-      if (e.scope === "product" && !e.value) return;
-      onAdd({ type: "pct", scope: e.scope, value: e.scope === "all" ? null : e.value, pct: Number(e.pct), month: e.month || null });
+      if (e.scope === "product" && !e.value.trim()) return setHint("Enter a product id, e.g. PROD_1320.");
+      if (e.pct === "" || Number.isNaN(Number(e.pct))) return setHint("Enter a % change.");
+      onAdd({ type: "pct", scope: e.scope, value: e.scope === "all" ? null : e.value.trim(), pct: Number(e.pct), month: e.month || null });
     } else {
-      if (!e.item_id || e.qty === "" || !e.month) return;
+      if (!e.item_id || e.qty === "" || !e.month) return setHint("Enter an item id, units and a month.");
       onAdd({ type: "item", item_id: Number(e.item_id), qty: Number(e.qty), month: e.month });
     }
   };
@@ -67,6 +70,7 @@ function EditBuilder({ monthList, onAdd }) {
       <button data-testid="edit-add-btn" type="button" onClick={add} className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs flex items-center gap-1">
         <Plus className="h-3.5 w-3.5" /> Add edit
       </button>
+      {hint && <span data-testid="edit-hint" className="w-full text-[11px] text-amber-300">{hint}</span>}
     </div>
   );
 }
@@ -125,7 +129,7 @@ function CompareTable({ data }) {
             {cols.map((c) => (
               <th key={c.id} className="py-2 pr-3 text-right align-bottom">
                 <span className={`block text-xs font-semibold ${c.id === "current" ? "text-slate-300" : "text-indigo-300"}`}>{c.name}</span>
-                {c.created_by && <span className="block text-[10px] text-slate-500 font-normal">by {c.created_by}, {c.edits.length} edits</span>}
+                {c.created_by && <span className="block text-[10px] text-slate-500 font-normal">by {c.created_by}, {c.edits.length} edit{c.edits.length === 1 ? "" : "s"}</span>}
               </th>
             ))}
           </tr>
@@ -196,7 +200,7 @@ export default function ScenariosPage({ user, summary }) {
             <button data-testid="new-scenario-btn" onClick={() => setEditing("new")}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold flex items-center gap-1.5"><Plus className="h-3.5 w-3.5" /> New</button>
           )}>
-          {editing && <ScenarioForm initial={editing === "new" ? null : editing} monthList={monthList} onSave={save} onCancel={() => setEditing(null)} />}
+          {editing && <ScenarioForm key={editing === "new" ? "new" : editing.id} initial={editing === "new" ? null : editing} monthList={monthList} onSave={save} onCancel={() => setEditing(null)} />}
           <ul className="space-y-2 mt-3" data-testid="scenario-list">
             {list && list.scenarios.length === 0 && <li className="text-xs text-slate-500">No scenarios yet for this cycle.</li>}
             {list && list.scenarios.map((s) => (
@@ -206,7 +210,7 @@ export default function ScenariosPage({ user, summary }) {
                   <input type="checkbox" data-testid={`scenario-select-${s.id}`} checked={selected.includes(s.id)} onChange={() => toggle(s.id)} className="mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-semibold text-white">{s.name}</div>
-                    <div className="text-[10px] text-slate-500">by {s.created_by} | {s.edits.length} edits</div>
+                    <div className="text-[10px] text-slate-500">by {s.created_by} | {s.edits.length} edit{s.edits.length === 1 ? "" : "s"}</div>
                     {s.description && <div className="text-[11px] text-slate-400 mt-1">{s.description}</div>}
                     <ul className="mt-1 text-[10px] text-slate-400">{s.edits.slice(0, 3).map((e, i) => <li key={i}>{describe(e)}</li>)}{s.edits.length > 3 && <li>...</li>}</ul>
                   </div>

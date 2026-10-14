@@ -13,7 +13,8 @@ export default function NotificationBell({ onNavigate }) {
   useEffect(() => {
     load();
     const t = setInterval(load, POLL_MS);
-    return () => clearInterval(t);
+    window.addEventListener("sop:notifications-refresh", load);
+    return () => { clearInterval(t); window.removeEventListener("sop:notifications-refresh", load); };
   }, [load]);
   useEffect(() => {
     const close = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
@@ -63,7 +64,7 @@ export default function NotificationBell({ onNavigate }) {
                       {!n.read && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />}
                     </span>
                     <span className="block text-[11px] text-slate-400 mt-0.5 leading-relaxed">{n.body}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">{new Date(n.created_at).toLocaleString("en-GB")}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">{new Date(n.created_at).toLocaleString("en-GB", { timeZone: "Europe/London", dateStyle: "medium", timeStyle: "short" })} UK</span>
                   </span>
                 </button>
               </li>

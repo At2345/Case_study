@@ -72,7 +72,7 @@ def test_scheduler_fires_due_jobs_once_and_moves_next_run():
 def test_scheduler_skips_while_another_run_is_busy():
     store, jobs = FakeSchedules("2026-03-02T06:00:00+00:00"), FakeJobs(busy=True)
     assert Scheduler(store, jobs).tick(datetime(2026, 3, 2, 7, tzinfo=UTC)) == []
-    assert store.log == ["skipped: another run in progress"]
+    assert store.log == ["waiting: another run in progress"]
 
 
 # ---------------------------------------------------------------- what-if engine

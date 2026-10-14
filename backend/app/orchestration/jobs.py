@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 log = logging.getLogger("sop.jobs")
@@ -55,8 +56,10 @@ class JobRunner:
             error = f"{type(exc).__name__}: {exc}"
             self.runs.finish(run_id, "FAILED", error=error)
         finally:
-            self._lock.release()
-        self._notify(run_id, kind, status, error)
+            try:
+                self._notify(run_id, kind, status, error)
+            finally:
+                self._lock.release()
 
     def _notify(self, run_id: str, kind: str, status: str, error: Optional[str]) -> None:
         if self.notes is None:
@@ -67,6 +70,7 @@ class JobRunner:
         elif kind == "monthly_cycle":
             s = self.state["svc"]
             n, led = s._summary_static["exceptions_requiring_review"], s._summary_static["planner_led_skus"]
+            lbl = lambda iso: datetime.strptime(iso, "%Y-%m-%d").strftime("%b %Y")  # noqa: E731
             self.notes.add(PLANNERS, "queue_ready", "Exception queue is ready",
-                           f"Cycle {s.cutoff}: {n} exceptions to review and {led} planner-led items, planning from {s.first_month}.",
+                           f"Actuals to {lbl(s.cutoff)}: {n} exceptions to review and {led} planner-led items, planning from {lbl(s.first_month)}.",
                            "workbench", run_id)

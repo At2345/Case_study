@@ -68,7 +68,10 @@ export default function OperationsPage({ role, onReloaded }) {
   }, [running, load]);
   const wasRunning = React.useRef(false);
   useEffect(() => {
-    if (wasRunning.current && !running) onReloaded();
+    if (wasRunning.current && !running) {
+      onReloaded();
+      window.dispatchEvent(new Event("sop:notifications-refresh"));
+    }
     wasRunning.current = running;
   }, [running, onReloaded]);
 

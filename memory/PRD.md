@@ -21,7 +21,14 @@ Demand planner (Danny), admin (runs the cycle), auditor (read-only, verifies the
 - UI tabs: Workbench, FVA & audit, Supply & risk, Operations, Co-pilot
 - Tests: 185 backend + 20 frontend pass; testing agent iteration_1 all flows pass
 
+## Iteration 2 (2026-06)
+- Scheduled runs (UK time, admin-editable in Operations): monthly cycle on the 2nd at 06:00, Amazon daily at 05:00; in-process scheduler with an atomic Mongo claim
+- In-app notifications (header bell, per-user read state): queue ready -> planners/admins; failures and interrupted runs -> admins
+- What-if scenarios tab: copy the consensus, apply % (all/channel/product, month optional) or item edits, compare up to 3 vs current (value, margin, OTIF fines, safety stock, holding cost)
+- Tests: 194 backend unit tests + 47 live API tests pass; testing agent iteration_2 passed
+
 ## Backlog
 - P1: production scheduling and sources (S3/MinIO drops, TPM promo sync, EDI 852), OpenTelemetry spans, drift alerts
 - P1: censoring-aware (exposure-weighted) training/evaluation; more rolling-origin cutoffs for MinT-shrink
+- P1: promote a scenario into ledger decisions (audited) before commit
 - P2: PPT export, per-customer OTIF clauses once data exists (Q4), business sign-off on open questions Q1-Q18

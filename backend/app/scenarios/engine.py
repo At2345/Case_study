@@ -43,8 +43,13 @@ def validate_edits(edits: List[Dict[str, Any]], svc) -> None:
             raise ValueError(f"no plan for month {e['month']}")
         if e["type"] == "item" and not svc.has_item(int(e["item_id"])):
             raise ValueError(f"unknown item {e['item_id']}")
-        if e["type"] == "pct" and e.get("scope", "all") != "all" and not e.get("value"):
+        scope = e.get("scope", "all")
+        if e["type"] == "pct" and scope != "all" and not e.get("value"):
             raise ValueError("a channel or product is required for a scoped % change")
+        if e["type"] == "pct" and scope == "channel" and e["value"] not in set(svc.triage["channel"]):
+            raise ValueError(f"unknown channel {e['value']}")
+        if e["type"] == "pct" and scope == "product" and svc.product_items(e["value"]).empty:
+            raise ValueError(f"unknown or inactive product {e['value']}")
 
 
 def score(svc, cons: pd.DataFrame, terms: Dict[str, Any]) -> Dict[str, Any]:

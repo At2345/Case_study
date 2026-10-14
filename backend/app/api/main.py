@@ -70,7 +70,9 @@ def create_app(
         from app.store.runs import ChatStore, RunStore
         runs, chats = RunStore(db), ChatStore(db)
         schedules, notes, scenarios = ScheduleStore(db), NotificationStore(db), ScenarioStore(db)
-        runs.fail_stale()
+        for run_id in runs.fail_stale():
+            notes.add(["admin"], "error", "Pipeline run interrupted", "The server restarted during the run; start it again from Operations.",
+                      "operations", run_id)
         jobs = JobRunner(state, runs, reload_fn, notes)
     app.state.jobs, app.state.schedules = jobs, schedules
     metrics = Metrics()

@@ -33,7 +33,9 @@ class ScheduleStore:
                 self.col.insert_one(doc)
 
     def all(self) -> List[Dict[str, Any]]:
-        return [{k: v for k, v in d.items() if k != "_id"} for d in self.col.find({}, sort=[("job", 1)])]
+        order = list(DEFAULTS)
+        docs = [{k: v for k, v in d.items() if k != "_id"} for d in self.col.find({})]
+        return sorted(docs, key=lambda d: order.index(d["job"]) if d["job"] in order else len(order))
 
     def get(self, job: str) -> Optional[Dict[str, Any]]:
         d = self.col.find_one({"job": job})

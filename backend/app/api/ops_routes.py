@@ -17,9 +17,9 @@ MAX_COMPARE = 3
 class ScheduleUpdate(BaseModel):
     enabled: bool
     frequency: Literal["daily", "monthly"]
-    day: Optional[int] = Field(None, ge=1, le=28)
-    hour: int = Field(..., ge=0, le=23)
-    minute: int = Field(0, ge=0, le=59)
+    day: Optional[int] = None
+    hour: int
+    minute: int = 0
 
 
 class PctEdit(BaseModel):

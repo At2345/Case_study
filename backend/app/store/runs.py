@@ -41,8 +41,10 @@ class RunStore:
     def recent(self, limit: int = 20) -> List[Dict[str, Any]]:
         return [_out(d) for d in self.col.find({}, sort=[("started_at", -1)], limit=limit)]
 
-    def fail_stale(self) -> None:
+    def fail_stale(self) -> List[str]:
+        ids = [str(d["_id"]) for d in self.col.find({"status": "RUNNING"}, {"_id": 1})]
         self.col.update_many({"status": "RUNNING"}, {"$set": {"status": "FAILED", "error": "server restarted during the run"}})
+        return ids
 
 
 class ChatStore:

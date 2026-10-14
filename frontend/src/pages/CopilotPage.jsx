@@ -19,7 +19,7 @@ export default function CopilotPage() {
   const end = useRef(null);
 
   useEffect(() => {
-    api.assistantHistory().then((h) => { setMessages(h.messages); setEnabled(h.enabled); }).catch((e) => setError(e.message));
+    api.assistantHistory().then((h) => { setMessages((prev) => (prev.length ? prev : h.messages)); setEnabled(h.enabled); }).catch((e) => setError(e.message));
   }, []);
   useEffect(() => { if (end.current) end.current.scrollIntoView({ block: "end" }); }, [messages]);
 

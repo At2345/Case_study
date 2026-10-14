@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 log = logging.getLogger("sop.scheduler")
 
 TZ = "Europe/London"
+BUSY = "waiting: another run in progress"
 DEFAULTS = {
     "monthly_cycle": {"frequency": "monthly", "day": 2, "hour": 6, "minute": 0},
     "amazon_daily": {"frequency": "daily", "day": None, "hour": 5, "minute": 0},
@@ -38,11 +39,11 @@ def next_run(spec: Dict[str, Any], after: datetime) -> datetime:
 
 def validate(spec: Dict[str, Any]) -> None:
     if spec["frequency"] not in ("daily", "monthly"):
-        raise ValueError("frequency must be daily or monthly")
+        raise ValueError("Frequency must be daily or monthly.")
     if not 0 <= int(spec["hour"]) <= 23 or not 0 <= int(spec["minute"]) <= 59:
-        raise ValueError("hour 0-23 and minute 0-59")
+        raise ValueError("Time must be between 00:00 and 23:59.")
     if spec["frequency"] == "monthly" and not 1 <= int(spec.get("day") or 0) <= 28:
-        raise ValueError("day must be 1-28 for a monthly schedule")
+        raise ValueError("Day must be between 1 and 28 so the run happens every month.")
 
 
 class Scheduler:
@@ -58,7 +59,8 @@ class Scheduler:
         fired = []
         for s in self.schedules.due(now):
             if self.jobs.busy():
-                self.schedules.record(s["job"], now, "skipped: another run in progress")
+                if s.get("last_outcome") != BUSY:  # wait for the other run; log the delay once
+                    self.schedules.record(s["job"], now, BUSY)
                 continue
             if not self.schedules.claim(s["job"], s["next_run_at"], next_run(s, now).isoformat()):
                 continue
