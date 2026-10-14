@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -59,19 +58,7 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
     # ------------------------------------------------------------------ OTIF (F-B2B-03)
     def otif_rows() -> Dict[str, Any]:
         svc = state["svc"]
-        cfg = otif.load_terms(store_dir)
-        cons = svc.consensus(decisions())
-        ph = svc.phasing_items
-        if ph.empty:
-            return {"terms": cfg, "rows": [], "total_penalty_gbp": 0.0}
-        ph = ph.assign(month=pd.to_datetime(ph["month"]).dt.strftime("%Y-%m-%d"))
-        j = cons.merge(ph[["item_id", "month", "booked_qty"]], on=["item_id", "month"], how="inner")
-        price = svc.triage["sales_price"]
-        rows = [{"item_id": int(r.item_id), "product_id": r.product_id, "channel": r.channel, "month": r.month,
-                 "booked": float(r.booked_qty), "plan": float(r.consensus_qty), "sales_price": float(price.get(r.item_id, 0.0))}
-                for r in j.itertuples()]
-        risk = otif.check(rows, cfg)
-        return {"terms": cfg, "rows": risk, "total_penalty_gbp": float(sum(r["penalty_gbp"] for r in risk))}
+        return otif.from_plan(svc, svc.consensus(decisions()), otif.load_terms(store_dir))
 
     @app.get("/api/v1/otif")
     def otif_risk(limit: int = Query(50, ge=1, le=1000), user=Depends(require(*all_roles))):
@@ -128,34 +115,15 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         return {"meta": ex.get("amazon_meta"), "top_surges": top}
 
     # ------------------------------------------------------------------ orchestration (Phase 4)
-    lock = threading.Lock()
-
-    def _run_job(run_id: str, kind: str) -> None:
-        try:
-            if kind == "amazon_daily":
-                from app.orchestration.graph import amazon_daily
-                runs.step(run_id, {"node": "amazon_daily", "status": "ok", "detail": amazon_daily()})
-                status = "SUCCEEDED"
-            else:
-                from app.orchestration.graph import run_cycle
-                status = run_cycle(on_step=lambda s: runs.step(run_id, s)).get("status", "FAILED")
-            if status != "FAILED" and reload_fn is not None:
-                state["svc"] = reload_fn()
-            runs.finish(run_id, status)
-        except Exception as exc:
-            log.exception("pipeline run failed")
-            runs.finish(run_id, "FAILED", error=f"{type(exc).__name__}: {exc}")
-        finally:
-            lock.release()
+    jobs = ctx.get("jobs")
 
     def _start(kind: str, user: Dict[str, str]) -> Dict[str, Any]:
-        if runs is None:
+        if jobs is None:
             raise HTTPException(status_code=503, detail="Run store (MongoDB) is not configured.")
-        if not lock.acquire(blocking=False):
-            raise HTTPException(status_code=409, detail="A pipeline run is already in progress.")
-        run_id = runs.start(kind, user["username"])
-        threading.Thread(target=_run_job, args=(run_id, kind), daemon=True).start()
-        return {"run_id": run_id, "status": "RUNNING", "kind": kind}
+        try:
+            return jobs.start(kind, user["username"])
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
     @app.post("/api/v1/admin/cycles/run")
     def run_cycle_endpoint(user=Depends(require(admin))):

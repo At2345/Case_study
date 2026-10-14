@@ -9,6 +9,7 @@ import ScorecardPage from "./pages/ScorecardPage";
 import SupplyRiskPage from "./pages/SupplyRiskPage";
 import OperationsPage from "./pages/OperationsPage";
 import CopilotPage from "./pages/CopilotPage";
+import ScenariosPage from "./pages/ScenariosPage";
 import { api, getStoredUser, getToken, onUnauthorized } from "./services/api";
 
 const DEFAULT_FILTERS = { state: "EXCEPTION_REVIEW", channel: "", risk_type: "", pending: "", limit: 50, offset: 0 };
@@ -117,6 +118,7 @@ export default function App() {
       {page === "supply" && <SupplyRiskPage />}
       {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} />}
       {page === "copilot" && <CopilotPage />}
+      {page === "scenarios" && <ScenariosPage user={user} summary={summary} />}
       {page === "workbench" && <SummaryCards summary={summary} />}
       {page === "workbench" && <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
         <ExceptionTable data={queue} filters={filters} onFilters={setFilters} selectedId={selectedId} onSelect={setSelectedId} loading={loading} />

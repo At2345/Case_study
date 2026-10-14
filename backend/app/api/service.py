@@ -88,6 +88,7 @@ class DataService:
         self._profile = {r.channel: (float(r.p0), float(r.p1), float(r.p2plus)) for r in self.phasing_profile.itertuples()}
         self.monthly = monthly.copy()
         self.monthly["month"] = self.monthly["date"].map(_month)
+        self._months = set(self.monthly["month"])
         self.actuals = actuals
         self.meta = meta
         self.cutoff: str = meta["cutoff"]
@@ -148,6 +149,9 @@ class DataService:
 
     def item_row(self, item_id: int) -> Optional[pd.Series]:
         return self.triage.loc[item_id] if item_id in self.triage.index else None
+
+    def has_month_any(self, month: str) -> bool:
+        return month in self._months
 
     def has_month(self, item_id: int, month: str) -> bool:
         m = self._monthly_by_item.get(item_id)

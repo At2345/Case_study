@@ -1,9 +1,10 @@
 import React from "react";
 import { Layers, Download, CheckCheck, LogOut, ShieldCheck, FileText } from "lucide-react";
 import { monthLabel } from "../lib/format";
+import NotificationBell from "./NotificationBell";
 
 export const PAGES = [
-  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["supply", "Supply & risk"], ["operations", "Operations"], ["copilot", "Co-pilot"],
+  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["scenarios", "Scenarios"], ["supply", "Supply & risk"], ["operations", "Operations"], ["copilot", "Co-pilot"],
 ];
 
 export default function Header({ summary, user, onExport, onCommit, onLogout, committing, page, onPage, onBriefing }) {
@@ -27,6 +28,7 @@ export default function Header({ summary, user, onExport, onCommit, onLogout, co
         )}
       </div>
       <div className="flex items-center gap-3">
+        <NotificationBell onNavigate={onPage} />
         <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs">
           <ShieldCheck className="h-4 w-4 text-emerald-400" />
           <span>Audit ledger: insert-only</span>

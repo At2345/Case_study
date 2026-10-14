@@ -3,6 +3,7 @@ import { Play, RefreshCw, CheckCircle2, XCircle, Circle, PauseCircle, Database }
 import { api } from "../services/api";
 import { fmtNum } from "../lib/format";
 import { Panel, Stat, DataTable, ErrorNote } from "../components/ui";
+import SchedulePanel from "../components/SchedulePanel";
 
 const STATUS_STYLE = {
   RUNNING: "bg-sky-900 text-sky-200", AWAITING_REVIEW: "bg-amber-900 text-amber-200", SUCCEEDED: "bg-emerald-900 text-emerald-200",
@@ -81,6 +82,7 @@ export default function OperationsPage({ role, onReloaded }) {
   return (
     <div className="px-8 py-6 space-y-6" data-testid="operations-page">
       <ErrorNote error={error} />
+      <SchedulePanel isAdmin={isAdmin} />
       <Panel title="Monthly cycle orchestration (LangGraph)" testId="cycle-runs-panel"
         subtitle="INGEST/VALIDATE, AMAZON DAILY, BASE INFERENCE, RECONCILE, PHASING, RULES/TRIAGE, BANDS/SAFETY STOCK, NARRATIVE, then an interrupt for human review. A failed guard halts the run; nothing after it is published."
         right={isAdmin && (

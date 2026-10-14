@@ -46,3 +46,19 @@ def check(rows: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[Dict[str, Any
         out.append({**r, "fill_rate": fill, "shortfall_units": short, "penalty_gbp": short * r["sales_price"] * t.penalty_pct,
                     "terms": asdict(t)})
     return sorted(out, key=lambda x: -x["penalty_gbp"])
+
+
+def from_plan(svc, cons, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """OTIF risk of a consensus frame (item_id, product_id, channel, month, consensus_qty) against the order book."""
+    import pandas as pd
+    ph = svc.phasing_items
+    if ph.empty:
+        return {"terms": cfg, "rows": [], "total_penalty_gbp": 0.0}
+    ph = ph.assign(month=pd.to_datetime(ph["month"]).dt.strftime("%Y-%m-%d"))
+    j = cons.merge(ph[["item_id", "month", "booked_qty"]], on=["item_id", "month"], how="inner")
+    price = svc.triage["sales_price"]
+    rows = [{"item_id": int(r.item_id), "product_id": r.product_id, "channel": r.channel, "month": r.month,
+             "booked": float(r.booked_qty), "plan": float(r.consensus_qty), "sales_price": float(price.get(r.item_id, 0.0))}
+            for r in j.itertuples()]
+    risk = check(rows, cfg)
+    return {"terms": cfg, "rows": risk, "total_penalty_gbp": float(sum(r["penalty_gbp"] for r in risk))}

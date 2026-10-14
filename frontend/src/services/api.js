@@ -119,6 +119,16 @@ export const api = {
       }
     }
   },
+  schedules: () => request("/api/v1/schedules"),
+  updateSchedule: (job, body) => request(`/api/v1/admin/schedules/${job}`, { method: "PUT", body }),
+  notifications: () => request("/api/v1/notifications"),
+  readNotification: (id) => request(`/api/v1/notifications/${id}/read`, { method: "POST" }),
+  readAllNotifications: () => request("/api/v1/notifications/read-all", { method: "POST" }),
+  scenarios: () => request("/api/v1/scenarios"),
+  createScenario: (body) => request("/api/v1/scenarios", { method: "POST", body }),
+  updateScenario: (id, body) => request(`/api/v1/scenarios/${id}`, { method: "PUT", body }),
+  deleteScenario: (id) => request(`/api/v1/scenarios/${id}`, { method: "DELETE" }),
+  compareScenarios: (ids) => request(`/api/v1/scenarios/compare${qs({ ids: ids.join(",") })}`),
   async briefing() {
     const res = await request("/api/v1/export/briefing.pdf", { raw: true });
     return res.blob();

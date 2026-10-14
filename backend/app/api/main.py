@@ -63,11 +63,16 @@ def create_app(
         version="1.0.0",
     )
     app.state.narrator = narrator or Narrator(None, store_dir / "narratives.db")
-    runs = chats = None
+    runs = chats = jobs = schedules = notes = scenarios = None
     if db is not None:
+        from app.orchestration.jobs import JobRunner
+        from app.store.ops import NotificationStore, ScenarioStore, ScheduleStore
         from app.store.runs import ChatStore, RunStore
         runs, chats = RunStore(db), ChatStore(db)
+        schedules, notes, scenarios = ScheduleStore(db), NotificationStore(db), ScenarioStore(db)
         runs.fail_stale()
+        jobs = JobRunner(state, runs, reload_fn, notes)
+    app.state.jobs, app.state.schedules = jobs, schedules
     metrics = Metrics()
 
     @app.middleware("http")
@@ -82,7 +87,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Session-Id"],
     )
 
@@ -323,7 +328,10 @@ def create_app(
 
     from app.api.extended import register
     register(app, {"state": state, "ledger": ledger, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
-                   "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn})
+                   "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn, "jobs": jobs})
+    from app.api.ops_routes import register_ops
+    register_ops(app, {"state": state, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
+                       "schedules": schedules, "notes": notes, "scenarios": scenarios, "store_dir": store_dir})
     return app
 
 

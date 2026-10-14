@@ -26,3 +26,17 @@ def seed_users() -> None:
 
 seed_users()
 app = create_default_app()
+
+
+@app.on_event("startup")
+def start_scheduler() -> None:
+    if app.state.jobs is not None and os.environ.get("SCHEDULER_ENABLED", "true").lower() == "true":
+        from app.orchestration.scheduler import Scheduler
+        app.state.scheduler = Scheduler(app.state.schedules, app.state.jobs)
+        app.state.scheduler.start()
+
+
+@app.on_event("shutdown")
+def stop_scheduler() -> None:
+    if getattr(app.state, "scheduler", None) is not None:
+        app.state.scheduler.stop()
