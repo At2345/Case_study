@@ -8,6 +8,7 @@ MAX_CHARS = 600
 MAX_SENTENCES = 3
 NUMBER = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+FIELD_NAME = re.compile(r"\b[a-z0-9]+_[a-z0-9_]+\b")
 MARKDOWN = re.compile(r"[*#`]|^\s*[-\u2022]\s", re.MULTILINE)
 
 
@@ -43,6 +44,8 @@ def validate_narrative(text: str, telemetry: dict) -> Tuple[bool, List[str]]:
         reasons.append(f"too long ({len(text)} > {MAX_CHARS} characters)")
     if MARKDOWN.search(text):
         reasons.append("markdown or list formatting")
+    if FIELD_NAME.search(text):
+        reasons.append("raw field name in the text")
     sentences = [s for s in SENTENCE_SPLIT.split(text) if s.strip()]
     if len(sentences) > MAX_SENTENCES:
         reasons.append(f"too many sentences ({len(sentences)} > {MAX_SENTENCES})")

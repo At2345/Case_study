@@ -77,7 +77,7 @@ export default function CopilotPage() {
             <div key={m.id || i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
               <div data-testid={`copilot-msg-${m.role}`}
                 className={`max-w-[85%] whitespace-pre-wrap text-xs leading-relaxed rounded-xl px-4 py-3 ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-950 border border-slate-800 text-slate-200"}`}>
-                {m.text || (busy && i === messages.length - 1 ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : "")}
+                {(m.text || "").replace(/\*\*/g, "") || (busy && i === messages.length - 1 ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : "")}
               </div>
             </div>
           ))}

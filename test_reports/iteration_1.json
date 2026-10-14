@@ -1,0 +1,39 @@
+{
+  "summary": "Tested the backend (18 pytest API tests via the public URL, all pass) and the frontend end to end with Playwright for planner, admin and auditor. Everything requested works: login and nav tabs; workbench with 74 exceptions, the P10-P90 band and Gemini 'Explain with AI'; override with the 'Reason code is required.' check, Accept ML and the audit badge (Mongo ledger); disaggregation with mint_diag/proportional/ols (proposed values sum to the total, Apply records decisions); FVA/autopilot (empty)/ledger table and Verify ('Chain intact') as auditor; safety stock, coverage and OTIF tables plus the channel filter; Operations RBAC (planner sees no run buttons, POST returns 403); an admin monthly cycle went RUNNING -> AWAITING_REVIEW with all 8 nodes ok in about 25s, a second run during it got 409 (Amazon run too), and decisions survived the reload; Amazon panel shows 28,784,355 rows and 100% regression match; co-pilot SSE streaming, persistence across reload and clear; briefing PDF and CSV downloads; Prometheus metrics; 401/403 RBAC. Commit consensus stays disabled (70 pending) and was NOT clicked. No console errors and no 5xx. Only minor issues were found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/v1/items/{id}/narrative", "issue": "Gemini text quotes raw telemetry keys, e.g. 'plan_units of 1802 represent a -65.8 change_vs_baseline_pct ... value_delta_gbp of -55278'. The prompt should ask for plain business language and formatted numbers/GBP, or the guardrail should reject snake_case tokens."},
+      {"endpoint": "POST /api/v1/assistant/stream (context)", "issue": "DataService.top_queue() builds exception_queue_top from static final_h and ignores ledger decisions. After danny overrode item 106205 to 1,700, the co-pilot still said its plan was 1,802. Use consensus/current_final from decisions()."},
+      {"endpoint": "main.py CORS", "issue": "allow_methods is GET/POST/OPTIONS only, so DELETE /api/v1/assistant/history would fail cross-origin. It works now only because the frontend is same-origin. Add DELETE."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Co-pilot", "issues": ["Assistant replies are rendered as plain whitespace-pre-wrap text, so Markdown shows as literal **bold** and '1.  ' list markers. Render Markdown (e.g. react-markdown) or tell the LLM to answer in plain text."]},
+      {"screen": "Workbench detail form", "issues": ["The Final quantity input is pre-filled with unrounded floats (885.028, 60.0507, 65.37). Round to whole units or 1 decimal."]},
+      {"screen": "Supply & risk", "issues": ["'Holding cost change 68.8%' is shown in green with no sign or direction; label it as a reduction. Achieved service of 97.2% is below the 98.0% target but has no warning colour."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_sop_api.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Make the narrative prompt avoid raw field names and format numbers as GBP/units",
+    "Use decision-aware consensus quantities in the assistant context (top_queue)",
+    "Render Markdown in co-pilot messages (or force plain-text output)",
+    "Round the pre-filled quantity in the decision form",
+    "Add DELETE to CORS allow_methods"
+  ],
+  "critical_code_review_comments": [
+    "extended.py _run_job swaps state['svc'] from a background thread while requests may be reading it. This is acceptable for a demo but has no lock.",
+    "OLS disaggregation adds an equal absolute delta to every item (D2C item went 4.5 -> 104.7 for a +300 gap). Mathematically correct, but consider showing a warning for tiny channels."
+  ],
+  "updated_files": ["/app/backend/tests/test_sop_api.py"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% of requested flows (minor design issues only)"},
+  "seed_data_creation": "Ledger decisions made by danny for cutoff 2026-02-01: 106205 override 1700 (Commercial Intelligence), 103125 ML accepted, 100374=65.37 and 103784=830.1 via disaggregation. One admin monthly cycle run (AWAITING_REVIEW). Co-pilot history for danny and auditor cleared.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: REACT_APP_BACKEND_URL=<url> python -m pytest backend/tests/test_sop_api.py. That suite does not commit or run cycles. 4 of 74 exceptions are decided, so commit stays disabled; do not commit. The container clock reads Oct 2026.",
+  "test_credentials": "From /app/memory/test_credentials.md: danny/PlannerPass2026!, admin/AdminPass2026!, auditor/AuditorPass2026! (all valid)"
+}

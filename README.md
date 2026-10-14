@@ -22,6 +22,14 @@ python -m app.phasing.run            # delivery-lag profile, order-book bookings
 python -m app.triage.run             # tiers, risk flags, narratives -> triage_live / triage_monthly / triage_meta
 ```
 
+Phase 2-3 artifacts (after the triage): `python -m app.pipeline.daily_amazon`, `python -m app.forecasting.quantiles`,
+`python -m app.inventory.safety_stock`. Or run the whole LangGraph cycle from the Operations tab (admin).
+
+### Preview environment (Emergent)
+
+`backend/server.py` loads `backend/.env` (MONGO_URL, DB_NAME, EMERGENT_LLM_KEY, JWT_SECRET, CORS_ORIGINS, SEED_* passwords),
+seeds the users `danny` / `admin` / `auditor` and serves the API on :8001; the Vite workbench runs on :3000 (`yarn start`).
+
 ### 2. Run the API (FastAPI, SQLite audit ledger in `var/`)
 
 ```powershell

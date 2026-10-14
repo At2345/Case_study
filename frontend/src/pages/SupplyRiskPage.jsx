@@ -12,13 +12,14 @@ function SafetySummary({ s }) {
       <Stat testId="ss-a-dynamic" label="A-items dynamic SS" value={fmtNum(a.ss_dynamic_units)} sub="units, from P10-P90 spread" tone="text-emerald-300" />
       <Stat label="A-items static SS" value={fmtNum(a.ss_static_units)} sub="units, 12-month demand sigma" />
       <Stat testId="ss-a-holding" label="Holding cost (A)" value={fmtGbpPlain(a.holding_dynamic_gbp)} sub={`vs ${fmtGbpPlain(a.holding_static_gbp)} static, ${s.holding_rate * 100}% p.a.`} />
-      <Stat testId="ss-a-reduction" label="Holding cost change" value={pct(a.reduction_pct)}
+      <Stat testId="ss-a-reduction" label="Holding cost reduction" value={a.reduction_pct === null ? "-" : `-${(a.reduction_pct * 100).toFixed(1)}%`}
         sub={`target ${s.target_reduction_pct * 100}% ${s.target_met_on_a_items ? "(met)" : "(not met)"}`}
         tone={s.target_met_on_a_items ? "text-emerald-400" : "text-amber-400"} />
       {s.service_backtest && (
         <>
           <Stat testId="ss-service-dynamic" label="Achieved service, dynamic" value={pct(s.service_backtest.service_dynamic)}
-            sub={`A-items, h1, cutoff ${s.service_backtest.cutoff}, target ${pct(s.service_backtest.target_service)}`} tone="text-emerald-300" />
+            sub={`A-items, h1, cutoff ${s.service_backtest.cutoff}, target ${pct(s.service_backtest.target_service)}`}
+            tone={s.service_backtest.service_dynamic >= s.service_backtest.target_service ? "text-emerald-300" : "text-amber-300"} />
           <Stat testId="ss-service-static" label="Achieved service, static" value={pct(s.service_backtest.service_static)}
             sub={`${fmtNum(s.service_backtest.rows)} item-months; bands fitted in-sample`} />
         </>

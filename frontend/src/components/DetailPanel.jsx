@@ -41,7 +41,8 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
       const d = await api.item(itemId);
       setDetail(d);
       const first = d.plan[0];
-      setQty(String(d.decision ? d.decision.submitted_quantity : first ? first.final : ""));
+      const q = d.decision ? d.decision.submitted_quantity : first ? first.final : null;
+      setQty(q === null ? "" : String(Math.round(q)));
     } catch (e) {
       setLoadError(e.message);
     }

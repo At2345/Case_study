@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Tuple
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 SYSTEM_PROMPT = (
     "You write short explanations for a demand planner reviewing one item in a UK consumer-goods S&OP cycle. "
@@ -13,6 +13,8 @@ SYSTEM_PROMPT = (
     "Write 2-3 sentences of plain text: say why the item needs attention (the risk flags and the signals that support them), "
     "then what the planner should check. "
     "Percentages in the JSON are already percentages. If a signal contradicts the plan, say so. "
+    "Write in plain business language for a planner: never write JSON field names or snake_case words; say "
+    "'the plan', 'the baseline', 'units already booked', and give money in pounds (for example \u00a355,278). "
     "No markdown, no lists, no greetings."
 )
 

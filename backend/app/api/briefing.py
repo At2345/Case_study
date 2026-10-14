@@ -56,8 +56,8 @@ def build_pdf(ctx: Dict[str, Any], safety: Optional[Dict[str, Any]], otif_out: D
             story.append(Paragraph(f"{w['channel']} {w['month']}: {w['imputed_share'] * 100:.0f}% of actuals imputed "
                                    f"({w['items']:,} items); masked as missing in this cycle.", st["Normal"]))
     story += [Spacer(1, 4 * mm), Paragraph("Top exceptions by value at risk", st["Heading2"]),
-              _table([["Item", "Channel", "ABC", "Baseline", "ML plan", "Value delta", "Risk"]] +
-                     [[str(r["item_id"]), r["channel"], str(r["abc_category"]), _n(r["baseline_h"]), _n(r["final_h"]),
+              _table([["Item", "Channel", "ABC", "Baseline", "Consensus", "Value delta", "Risk"]] +
+                     [[str(r["item_id"]), r["channel"], str(r["abc_category"]), _n(r["baseline_forecast"]), _n(r["current_final"]),
                        _gbp(r["value_delta_gbp"]), r["risk_type"]] for r in ctx["exception_queue_top"][:12]])]
     if ctx["phasing_first_month"]:
         story += [Spacer(1, 4 * mm), Paragraph("Demand vs expected deliveries (first planning month)", st["Heading2"]),

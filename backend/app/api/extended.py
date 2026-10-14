@@ -23,7 +23,8 @@ ASSISTANT_PROMPT = (
     "You are the S&OP co-pilot for a UK consumer-goods demand planning team. Answer the planner's question using only "
     "the JSON context provided with each question (current cycle summary, exception queue, order-book phasing, OTIF "
     "risk, safety stock, data-quality warnings, FVA). Quote numbers as they appear, use GBP and units, and say plainly "
-    "when the context does not contain the answer. Be concise: at most 6 sentences or a short list."
+    "when the context does not contain the answer. In the exception queue, current_final is the plan after planner decisions. "
+    "Answer in plain text without markdown (no asterisks or headings); short numbered lines are fine. At most 6 sentences."
 )
 
 
@@ -198,7 +199,7 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
                                         "exceptions_requiring_review", "planner_led_skus", "pending_decisions", "decided",
                                         "planned_value_gbp", "baseline_value_gbp", "critical_alerts", "committed")},
             "quality_warnings": s["quality_warnings"],
-            "exception_queue_top": svc.top_queue(20),
+            "exception_queue_top": svc.top_queue(dec, 20),
             "phasing_first_month": [r for r in ph if r["month"] == svc.first_month],
             "otif": {"items_at_risk": len(o["rows"]), "total_penalty_gbp": o["total_penalty_gbp"], "top": o["rows"][:5]},
             "safety_stock": {k: ss.get(k) for k in ("a_items", "all_items", "target_reduction_pct")} if ss else None,

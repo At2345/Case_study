@@ -271,10 +271,13 @@ class DataService:
     def product_items(self, product_id: str) -> pd.DataFrame:
         return self.triage[(self.triage["product_id"] == product_id) & self.triage["in_scope"]]
 
-    def top_queue(self, n: int = 20) -> List[Dict[str, Any]]:
+    def top_queue(self, decisions: Dict[DECISION_KEY, Dict[str, Any]], n: int = 20) -> List[Dict[str, Any]]:
+        """Largest exceptions with the planner's decision applied (current_final) next to the ML plan."""
         ids = self._filter_index.loc[self._filter_index["state"] == "EXCEPTION_REVIEW", "item_id"].head(n)
-        keys = ["item_id", "product_id", "channel", "abc_category", "baseline_h", "final_h", "value_delta_gbp", "risk_type", "risk_flags"]
-        return [{k: self._static[int(i)][k] for k in keys} for i in ids]
+        decided = self._decided_first_month(decisions)
+        keys = ["item_id", "product_id", "channel", "abc_category", "baseline_forecast", "ml_forecast", "current_final",
+                "value_delta_gbp", "risk_type", "risk_flags", "decision_reason"]
+        return [{k: r[k] for k in keys} for r in (self._row_to_exception(int(i), decided.get(int(i))) for i in ids)]
 
     # ------------------------------------------------------------------ order-book phasing
     def _probs(self, channel: str) -> Tuple[float, float, float]:
