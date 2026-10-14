@@ -7,3 +7,9 @@ node_modules/
 reports/
 var/
 dist/
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
