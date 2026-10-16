@@ -43,7 +43,7 @@ function NodeTrack({ nodes, run }) {
         if (s && s.status === "failed") icon = <XCircle className="h-3.5 w-3.5 text-rose-400" />;
         if (review && reached) icon = <PauseCircle className="h-3.5 w-3.5 text-amber-400" />;
         return (
-          <li key={n} title={s ? (s.error || JSON.stringify(s.detail)) : ""}
+          <li key={n} title={s ? (s.error || s.summary || "") : ""}
             className="flex items-center gap-1.5 text-[11px] bg-slate-950 border border-slate-800 rounded-md px-2 py-1 text-slate-300">
             {icon} {NODE_LABEL[n] || n.replace(/_/g, " ")} {s && <span className="text-slate-500 font-mono">{s.seconds}s</span>}
           </li>
@@ -53,7 +53,7 @@ function NodeTrack({ nodes, run }) {
   );
 }
 
-export default function OperationsPage({ role, onReloaded, onNavigateAction }) {
+export default function OperationsPage({ role, onReloaded, onNavigateAction, initialRunId }) {
   const [runs, setRuns] = useState(null);
   const [agentActions, setAgentActions] = useState(null);
   const [quality, setQuality] = useState(null);
@@ -74,6 +74,11 @@ export default function OperationsPage({ role, onReloaded, onNavigateAction }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  // Arriving from a notification or the Co-Pilot: open that specific run's summary.
+  useEffect(() => {
+    if (!initialRunId) return undefined;
+    api.runDetail(initialRunId).then(setDetail).catch((e) => setError(e.message));
+  }, [initialRunId]);
   const running = runs && runs.runs.some((r) => r.status === "RUNNING");
   useEffect(() => {
     if (!running) return undefined;
@@ -191,7 +196,7 @@ export default function OperationsPage({ role, onReloaded, onNavigateAction }) {
                     )}
                   </div>
                   {s.error && <div className="text-rose-300 mt-1">{s.error}</div>}
-                  {s.detail && <div className="text-slate-400 mt-1 font-mono">{JSON.stringify(s.detail)}</div>}
+                  {s.summary && <div className="text-slate-300 mt-1">{s.summary}</div>}
                 </div>
               ))}
             </div>

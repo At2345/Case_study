@@ -9,6 +9,7 @@ four-stage agent trace so the planner can see how the number was produced:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -18,25 +19,40 @@ from app.data.loaders import load
 from app.forecasting import dynamic as dynamic_forecast
 from app.forecasting.fallback import monthly_wide
 from app.forecasting.stat_methods import METHODS
+from app.narrative.guardrails import validate_narrative
+
+log = logging.getLogger("sop.agentic")
 
 HOLDOUT = 3
 
 INFORM_SYSTEM = (
     "You write short forecast briefs for a demand planner reviewing one item in a UK consumer-goods S&OP cycle. "
-    "Use only the facts in the JSON the user sends. Do not add numbers, dates, causes or events that are not in the JSON. "
+    "Use only the facts in the JSON the user sends. Do not add numbers, dates, causes or events that are not in the JSON, "
+    "and quote numbers exactly as they appear there. "
     "Write 2-3 sentences of plain business language: what the dynamic forecast says, why the method was chosen, "
-    "and what the planner should check. No markdown, no lists, no greetings."
+    "and what the planner should check. If prior_decisions are present, note whether the forecast continues or reverses them. "
+    "Never write JSON field names or snake_case words; say 'the first-month plan', 'the band', 'holdout error'. "
+    "No markdown, no lists, no greetings.\n\n"
+    "Example\n"
+    "JSON: {\"item_id\": 103125, \"channel\": \"Amazon\", \"phase\": \"GROWTH\", \"method\": \"combo_sn_ma12\", "
+    "\"first_month_units\": 1450, \"delta_vs_current\": 250, \"band_p10\": 1100, \"band_p90\": 1900, "
+    "\"method_scores\": [{\"method\": \"combo_sn_ma12\", \"wape\": 18.2}, {\"method\": \"ma6\", \"wape\": 24.7}], "
+    "\"booked_m1\": 900, \"prior_decisions\": [{\"month\": \"2026-02-01\", \"submitted_units\": 1200, \"reason\": \"PROMO_SUPPORT\"}]}\n"
+    "Brief: The combo seasonal/MA forecast plans 1,450 units in the first month, 250 above the current plan and inside "
+    "the P10-P90 band (1,100-1,900); it beat the 6-month MA on holdout error (18.2% vs 24.7% WAPE). "
+    "The order book already holds 900 units, and the forecast continues the promo-support decision from February (1,200 units). "
+    "Check that the buy-box position can absorb the lift before committing."
 )
 
 
-def run(svc, item_id: int, method: str = "auto", llm: Optional[Any] = None) -> Dict[str, Any]:
+def run(svc, item_id: int, method: str = "auto", llm: Optional[Any] = None, history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     row = svc.item_row(item_id)
     if row is None:
         raise KeyError("Item not found")
     research = _research(svc, item_id, row)
     forecast = dynamic_forecast.item_forecast(svc, item_id, method)
     processed = _process(svc, item_id, row, forecast)
-    informed = _inform(svc, item_id, row, forecast, processed, research, llm)
+    informed = _inform(svc, item_id, row, forecast, processed, research, llm, history)
     return {
         "item_id": int(item_id),
         "product_id": str(row["product_id"]),
@@ -72,11 +88,11 @@ def _research(svc, item_id: int, row) -> Dict[str, Any]:
         "months_to_eol": _clean(row.get("months_to_eol")),
         "channel": str(row.get("channel", "")),
         "abc_category": str(row.get("abc_category", "")),
-        "promo_overlap": _promo_overlap(item_id, svc.first_month),
+        "promo_overlap": promo_overlap(item_id, svc.first_month),
     }
 
 
-def _promo_overlap(item_id: int, first_month: str) -> List[Dict[str, Any]]:
+def promo_overlap(item_id: int, first_month: str) -> List[Dict[str, Any]]:
     try:
         promo = load("promotions", columns=["item_id", "promotion_name", "date_from", "date_to", "promotion_type"])
     except Exception:
@@ -144,20 +160,30 @@ def _choose_reason(method: str, history: np.ndarray, row) -> str:
 
 # ------------------------------------------------------------------ inform
 def _inform(svc, item_id: int, row, forecast: Dict[str, Any], processed: Dict[str, Any],
-            research: Dict[str, Any], llm: Optional[Any]) -> Dict[str, Any]:
+            research: Dict[str, Any], llm: Optional[Any], history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     brief = _brief(row, forecast, processed, research)
     text, source = brief, "deterministic"
     if llm is not None:
         try:
+            detail = svc.item_detail(item_id, {}) or {}
+            plan0 = (detail.get("plan") or [{}])[0]
+            scores = sorted(processed.get("method_scores") or [], key=lambda m: m.get("wape") or 1e9)[:2]
             payload = {
                 "item_id": item_id, "channel": research["channel"], "phase": research["phase"],
                 "method": processed["chosen_method"], "first_month_units": forecast["rows"][0]["dynamic"],
                 "delta_vs_current": forecast["rows"][0]["delta_to_current"],
+                "band_p10": plan0.get("p10"), "band_p90": plan0.get("p90"),
+                "method_scores": [{"method": m.get("method"), "wape": m.get("wape")} for m in scores],
                 "booked_m1": research["booked_m1"], "promo_overlap": research["promo_overlap"],
+                "prior_decisions": [{"month": r.get("target_month"), "submitted_units": r.get("submitted_quantity"),
+                                      "reason": r.get("reason_code")} for r in (history or [])[-3:]],
             }
             generated = (llm.generate(INFORM_SYSTEM, str(payload)) or "").strip()
-            if generated:
+            ok, reasons = validate_narrative(generated, payload)
+            if ok:
                 text, source = generated, "llm"
+            else:
+                log.warning("agentic brief rejected by guardrails: %s", "; ".join(reasons))
         except Exception:
             pass
     return {"brief": brief, "text": text, "source": source}

@@ -27,6 +27,7 @@ export default function App() {
   const [committing, setCommitting] = useState(false);
   const [page, setPage] = useState("workbench");
   const [scenarioPrompt, setScenarioPrompt] = useState("");
+  const [operationsRunId, setOperationsRunId] = useState(null);
 
   const logout = useCallback(() => {
     api.logout();
@@ -120,7 +121,13 @@ export default function App() {
     }
     if (action.type === "review_phasing") {
       setPage("supply");
-      setNotice("Opened Supply & risk for delivery phasing review.");
+      setNotice("Opened Supply & Risk for delivery phasing review.");
+      return;
+    }
+    if (action.type === "view_operation") {
+      setOperationsRunId(action.run_id || null);
+      setPage("operations");
+      setNotice(action.title ? `${action.title}: ${action.detail || ""}`.trim() : "Opened the Operations page.");
       return;
     }
     if (action.filters) {
@@ -132,8 +139,14 @@ export default function App() {
     if (action.item_id) {
       setSelectedId(action.item_id);
       setPage("workbench");
-      setNotice(`Opened item ${action.item_id} in the workbench.`);
+      setNotice(action.title ? `${action.title}: ${action.detail || ""}`.trim() : `Opened item ${action.item_id} in the workbench.`);
     }
+  };
+
+  const handleNotification = (n) => {
+    if (!n) return;
+    if (n.run_id) setOperationsRunId(n.run_id);
+    setPage(n.link || "operations");
   };
 
   if (!user) return <Login onLoggedIn={setUser} />;
@@ -141,13 +154,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       <Header summary={summary} user={user} onExport={exportDraft} onCommit={commit} onLogout={logout} committing={committing}
-        page={page} onPage={setPage} onBriefing={briefing} />
+        page={page} onPage={setPage} onBriefing={briefing} onNotification={handleNotification} />
       {summary && <QualityBanner warnings={summary.quality_warnings} />}
       {notice && <div className="mx-8 mt-4 bg-emerald-950/50 border border-emerald-800 text-emerald-200 rounded-lg px-4 py-3 text-xs">{notice}</div>}
       {error && <div role="alert" className="mx-8 mt-4 bg-rose-950/50 border border-rose-800 text-rose-200 rounded-lg px-4 py-3 text-xs">{error}</div>}
       {page === "scorecard" && <ScorecardPage role={user.role} />}
       {page === "supply" && <SupplyRiskPage onNavigateAction={navigateAction} />}
-      {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} onNavigateAction={navigateAction} />}
+      {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} onNavigateAction={navigateAction} initialRunId={operationsRunId} />}
       {page === "copilot" && <CopilotPage onNavigateAction={navigateAction} />}
       {page === "scenarios" && <ScenariosPage user={user} summary={summary} initialPrompt={scenarioPrompt} />}
       {page === "workbench" && <SummaryCards summary={summary} />}

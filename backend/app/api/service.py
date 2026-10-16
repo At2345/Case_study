@@ -176,6 +176,16 @@ class DataService:
                          "sales_price": float(r["sales_price"]), "purchase_price": float(r["purchase_price"])})
         return rows
 
+    def top_items_by_demand(self, channel: Optional[str], month: str, n: int = 5) -> List[Dict[str, Any]]:
+        """Best-selling items by planned demand for a channel (or all channels) in a month."""
+        m = self.monthly.merge(self.triage[["item_id", "channel", "product_id"]].reset_index(drop=True),
+                               on="item_id", how="left")
+        if channel:
+            m = m[m["channel"] == channel]
+        top = m[m["month"] == month].sort_values("final_qty", ascending=False).head(n)
+        return [{"item_id": int(r.item_id), "product_id": r.product_id, "channel": r.channel,
+                 "demand": float(r.final_qty)} for r in top.itertuples()]
+
     # ------------------------------------------------------------------ views
     def _row_to_exception(self, item_id: int, decision: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         s = self._static[item_id]
@@ -267,6 +277,7 @@ class DataService:
             "history": [{"month": _month(d), "actual": clean(v)} for d, v in zip(act["date"], act["target"])],
             "telemetry": {k: clean(r[k]) for k in self.TELEMETRY if k in r.index},
             "decision": first,
+            "first_month": self.first_month,
         }
 
     def sigma(self, item_id: int, month: str) -> Optional[float]:

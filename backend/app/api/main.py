@@ -197,7 +197,8 @@ def create_app(
         detail = svc.item_detail(item_id, dec)
         if detail is None:
             raise HTTPException(status_code=404, detail="Item not found")
-        telemetry = build_telemetry(detail, svc.phasing_detail(item_id, dec))
+        telemetry = build_telemetry(detail, svc.phasing_detail(item_id, dec),
+                                    history=ledger.overrides(cutoff=svc.cutoff, item_id=item_id, limit=3))
         result = app.state.narrator.narrate(telemetry, fallback=detail["item"].get("narrative") or "")
         return {"item_id": item_id, "enabled": app.state.narrator.enabled, **result}
 
@@ -214,11 +215,27 @@ def create_app(
     def fva(group_by: str = Query("planner_id", pattern="^(planner_id|reason_code)$"), user=Depends(require(*ALL_ROLES))):
         df = fva_frame((group_by,))
         rows = [{k: clean(v) for k, v in r.items()} for r in df.to_dict("records")]
+        # Overrides whose target month has no observed actual yet: they will be scored once actuals arrive.
+        svc = state["svc"]
+        ov = pd.DataFrame(ledger.overrides(cutoff=svc.cutoff))
+        pending = []
+        if not ov.empty:
+            ov = ov.copy()
+            ov["date"] = pd.to_datetime(ov["target_month"])
+            act_dates = set(pd.to_datetime(svc.actuals["date"]))
+            pend = ov[~ov["date"].isin(act_dates)]
+            if not pend.empty:
+                g = pend.groupby(group_by).agg(n_overrides=("item_id", "size"),
+                                               volume=("submitted_quantity", "sum")).reset_index()
+                pending = [{k: clean(v) for k, v in r.items()} for r in g.to_dict("records")]
         return {
             "group_by": group_by,
             "matured_overrides": int(df["n_overrides"].sum()) if not df.empty else 0,
             "rows": rows,
-            "note": "FVA = FPE(ML) - FPE(planner) in points over overrides whose month has actuals; positive means the override added value.",
+            "pending_overrides": int(sum(p["n_overrides"] for p in pending)),
+            "pending": pending,
+            "note": "FVA = FPE(ML) - FPE(planner) in points over overrides whose month has actuals; positive means the override added value. "
+                    "Pending overrides are scored once the target month's actuals arrive.",
         }
 
     @app.post("/api/v1/allocation/simulate")

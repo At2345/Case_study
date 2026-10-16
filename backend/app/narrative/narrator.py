@@ -61,7 +61,7 @@ class Narrator:
         try:
             text = (self.client.generate(system, user) or "").strip()
         except Exception as exc:  # network, quota, SDK missing: the planner still gets the template
-            log.warning("narrative generation failed: %s", type(exc).__name__)
+            log.warning("narrative generation failed: %s: %s", type(exc).__name__, str(exc)[:200])
             return self._template(fallback, [f"llm_error: {type(exc).__name__}"])
         ok, reasons = validate_narrative(text, telemetry)
         if not ok:

@@ -1,14 +1,24 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Trash2, Sparkles, RefreshCw, ArrowRight } from "lucide-react";
+import { Send, Trash2, Sparkles, RefreshCw, ArrowRight, Eye } from "lucide-react";
 import { api } from "../services/api";
 import { ErrorNote } from "../components/ui";
+import { fmtGbp, fmtNum } from "../lib/format";
 
 const SUGGESTIONS = [
   "Which three exceptions carry the most value at risk, and why?",
   "How big is the OTIF exposure and which items drive it?",
   "Summarise the data-quality issues in this cycle.",
   "How do B2B demand and expected deliveries differ next month?",
+  "How does the monthly planning cycle work?",
+  "What is Croston's method in demand forecasting?",
 ];
+
+const TIER_LABELS = { project: "project data", general_knowledge: "general knowledge", none: "not in project data" };
+const TIER_STYLES = {
+  project: "bg-indigo-950 text-indigo-300",
+  general_knowledge: "bg-amber-950 text-amber-300",
+  none: "bg-slate-800 text-slate-400",
+};
 
 function ActionChips({ actions, onNavigate }) {
   if (!actions || actions.length === 0) return null;
@@ -24,12 +34,54 @@ function ActionChips({ actions, onNavigate }) {
   );
 }
 
+function DetailView({ action, onClose }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const load = action.item_id ? api.item(action.item_id) : api.runDetail(action.run_id);
+    load.then((d) => live && setData(d)).catch((e) => live && setError(e.message));
+    return () => { live = false; };
+  }, [action.item_id, action.run_id]);
+  return (
+    <div className="mt-2 rounded-lg border border-indigo-900 bg-indigo-950/30 p-3 text-[11px]" data-testid="copilot-detail">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="font-semibold text-indigo-200">{action.title}</span>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">Close</button>
+      </div>
+      {error && <div className="text-rose-300">{error}</div>}
+      {!data && !error && <div className="text-slate-400">Loading details...</div>}
+      {data && action.item_id && (
+        <div className="space-y-1 text-slate-300">
+          <div>Item {data.item?.item_id} · {data.item?.channel} · {data.item?.phase} · {data.item?.state}</div>
+          <div>Risk: {data.item?.risk_type} · value delta {fmtGbp(data.item?.value_delta_gbp)}</div>
+          <div>Plan M1: baseline {fmtNum(data.plan?.[0]?.baseline)}, ML {fmtNum(data.plan?.[0]?.ml)}, consensus {fmtNum(data.plan?.[0]?.consensus)}</div>
+        </div>
+      )}
+      {data && action.run_id && (
+        <div className="space-y-1 text-slate-300">
+          <div>Status <strong className="text-slate-100">{data.status}</strong> · started {new Date(data.started_at).toLocaleString("en-GB")} by {data.started_by}</div>
+          <div className="flex flex-wrap gap-1">
+            {(data.steps || []).map((s, i) => (
+              <span key={`${s.node}-${i}`} className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${s.status === "failed" ? "bg-rose-950 text-rose-300" : "bg-slate-800 text-emerald-300"}`}>
+                {s.node.replace(/_/g, " ")} {s.seconds}s
+              </span>
+            ))}
+          </div>
+          {data.error && <div className="text-rose-300">{data.error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CopilotPage({ onNavigateAction }) {
   const [messages, setMessages] = useState([]);
   const [enabled, setEnabled] = useState(true);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [detailAction, setDetailAction] = useState(null);
   const end = useRef(null);
 
   useEffect(() => {
@@ -37,17 +89,20 @@ export default function CopilotPage({ onNavigateAction }) {
   }, []);
   useEffect(() => { if (end.current) end.current.scrollIntoView({ block: "end" }); }, [messages]);
 
+  const patchLast = (patch) => setMessages((m) => [...m.slice(0, -1), { ...m[m.length - 1], ...patch }]);
+
   const ask = async (q) => {
     const question = (q || input).trim();
     if (!question || busy) return;
     setInput("");
     setBusy(true);
     setError(null);
-    setMessages((m) => [...m, { role: "user", text: question }, { role: "assistant", text: "", actions: [] }]);
+    setMessages((m) => [...m, { role: "user", text: question }, { role: "assistant", text: "", actions: [], tier: null, sources: [] }]);
     try {
       await api.assistantStream(question,
-        (delta) => setMessages((m) => [...m.slice(0, -1), { role: "assistant", text: m[m.length - 1].text + delta, actions: m[m.length - 1].actions || [] }]),
-        (actions) => setMessages((m) => [...m.slice(0, -1), { role: "assistant", text: m[m.length - 1].text, actions }]));
+        (delta) => setMessages((m) => [...m.slice(0, -1), { ...m[m.length - 1], text: m[m.length - 1].text + delta }]),
+        (actions) => patchLast({ actions }),
+        (meta) => patchLast({ tier: meta.tier || null, sources: meta.sources || [] }));
     } catch (e) {
       setError(e.message);
       setMessages((m) => m.slice(0, -1));
@@ -93,7 +148,36 @@ export default function CopilotPage({ onNavigateAction }) {
               <div data-testid={`copilot-msg-${m.role}`}
                 className={`max-w-[85%] whitespace-pre-wrap text-xs leading-relaxed rounded-xl px-4 py-3 ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-950 border border-slate-800 text-slate-200"}`}>
                 {(m.text || "").replace(/\*\*/g, "") || (busy && i === messages.length - 1 ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : "")}
+                {m.role === "assistant" && m.tier && (
+                  <span data-testid={`copilot-tier-${m.tier}`}
+                    className={`inline-block mt-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold ${TIER_STYLES[m.tier] || ""}`}>
+                    {TIER_LABELS[m.tier] || m.tier}
+                  </span>
+                )}
+                {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {m.sources.map((s, i) => (
+                      <span key={`${s.title}-${i}`} title={s.snippet} data-testid={`copilot-source-${i}`}
+                        className="px-1.5 py-0.5 bg-slate-800 rounded text-[9px] text-slate-400">
+                        {s.title}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {m.role === "assistant" && onNavigateAction && <ActionChips actions={m.actions} onNavigate={onNavigateAction} />}
+                {m.role === "assistant" && (m.actions || []).some((a) => a.item_id || a.run_id) && (
+                  <div className="mt-2">
+                    <button type="button" data-testid={`copilot-details-btn-${i}`}
+                      onClick={() => setDetailAction(detailAction === m ? null : m)}
+                      className="flex items-center gap-1 px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md text-[10px] font-semibold text-slate-200">
+                      <Eye className="h-3 w-3" /> View details
+                    </button>
+                    {detailAction === m && (() => {
+                      const a = (m.actions || []).find((x) => x.item_id || x.run_id);
+                      return a ? <DetailView action={a} onClose={() => setDetailAction(null)} /> : null;
+                    })()}
+                  </div>
+                )}
               </div>
             </div>
           ))}

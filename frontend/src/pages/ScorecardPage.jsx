@@ -20,6 +20,19 @@ function FvaTable({ data }) {
   );
 }
 
+function PendingTable({ data }) {
+  const key = data.group_by;
+  return (
+    <DataTable testId="fva-pending-table" rows={data.pending}
+      empty="No overrides are waiting for actuals."
+      columns={[
+        { key, label: key === "planner_id" ? "Planner" : "Reason code" },
+        { key: "n_overrides", label: "Overrides", right: true },
+        { key: "volume", label: "Volume (units)", right: true, render: (r) => fmtNum(r.volume) },
+      ]} />
+  );
+}
+
 export default function ScorecardPage({ role }) {
   const [groupBy, setGroupBy] = useState("planner_id");
   const [segment, setSegment] = useState("channel");
@@ -72,6 +85,14 @@ export default function ScorecardPage({ role }) {
             </select>
           }>
           {fva && <FvaTable data={fva} />}
+          {fva && fva.matured_overrides === 0 && fva.pending_overrides > 0 && (
+            <div className="mt-4">
+              <h3 className="text-xs font-semibold text-slate-300 mb-2">
+                Pending — {fva.pending_overrides} override(s) awaiting actuals for the target month
+              </h3>
+              <PendingTable data={fva} />
+            </div>
+          )}
         </Panel>
         <Panel title="Autopilot promotion rule" testId="autopilot-panel"
           subtitle={auto ? `${auto.note} Requires ${auto.min_cycles} consecutive scored cycles.` : ""}

@@ -19,6 +19,7 @@ class Settings:
     mongo_uri: str = os.getenv("MONGO_URL", os.getenv("MONGO_URI", ""))
     mongo_db: str = os.getenv("DB_NAME", os.getenv("MONGO_DB", "sop"))
     demo_mode: bool = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    hybrid_search: str = os.getenv("HYBRID_SEARCH", "tier1").strip().lower()
 
 
 settings = Settings()

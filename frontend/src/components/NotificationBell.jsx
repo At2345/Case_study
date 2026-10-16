@@ -25,7 +25,7 @@ export default function NotificationBell({ onNavigate }) {
   const openNote = async (n) => {
     if (!n.read) await api.readNotification(n.id).catch(() => {});
     setOpen(false);
-    if (n.link) onNavigate(n.link);
+    onNavigate(n);
     load();
   };
   const readAll = async () => { await api.readAllNotifications().catch(() => {}); load(); };

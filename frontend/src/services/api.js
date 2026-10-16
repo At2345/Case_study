@@ -104,7 +104,7 @@ export const api = {
   auditVerify: () => request("/api/v1/audit/verify"),
   assistantHistory: () => request("/api/v1/assistant/history"),
   assistantClear: () => request("/api/v1/assistant/history", { method: "DELETE" }),
-  async assistantStream(question, onDelta, onActions) {
+  async assistantStream(question, onDelta, onActions, onMeta) {
     const res = await request("/api/v1/assistant/stream", { method: "POST", body: { question }, raw: true });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -122,6 +122,7 @@ export const api = {
         if (msg.error) throw new ApiError(503, msg.error);
         if (msg.delta) onDelta(msg.delta);
         if (msg.actions && onActions) onActions(msg.actions);
+        if (onMeta && (msg.tier || msg.sources)) onMeta({ tier: msg.tier, sources: msg.sources });
       }
     }
   },

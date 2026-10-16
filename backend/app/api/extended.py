@@ -13,15 +13,43 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.service import clean
+from app.config import settings
 from app.evaluation.disaggregate import METHODS, disaggregate
 from app.evaluation.fva import negative_fva_streaks, override_fva
 from app.forecasting import dynamic as dynamic_forecast
 from app.models.enums import ReasonCode, Role
+from app.narrative.concepts import concept_answer
+from app.narrative.guardrails import NUMBER as _NUMBER_RE
+from app.narrative.guardrails import _allowed_numbers
 from app.orchestration import agent_actions
+from app.retrieval.hybrid import CHANNELS, _structured_intent, retrieve
 from app.rules import autopilot as autopilot_rules
 from app.rules import otif
 
+
+def _step_summaries(steps: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Attach a plain-language summary to each step so UIs never render raw detail JSON."""
+    from app.orchestration.jobs import _node_summary
+    out = []
+    for s in steps or []:
+        step = dict(s)
+        if step.get("detail") is not None:
+            step["summary"] = _node_summary(step.get("node"), step.get("detail"))
+        out.append(step)
+    return out
+
+
 log = logging.getLogger("sop.api.ext")
+
+GENERAL_KNOWLEDGE_PROMPT = (
+    "You are answering a demand planner's question using your own general knowledge. "
+    "The project's data does not contain the answer, so do not claim it does. "
+    "Clearly label the answer as general knowledge, not from the project's data. "
+    "Never invent project-specific figures (item ids, quantities, cutoffs, FVA or OTIF numbers). "
+    "If your knowledge may be dated, say so (for example 'as of my knowledge cutoff'). "
+    "Answer in 2-4 plain sentences. No markdown, no lists, no greetings."
+)
+
 
 ASSISTANT_PROMPT = (
     "You are the S&OP co-pilot for a UK consumer-goods demand planning team. Answer the planner's question using only "
@@ -53,6 +81,17 @@ class RerunNodeRequest(BaseModel):
     node: str = Field(..., min_length=1, max_length=64)
 
 
+def _unverifiable_numbers(text: str, ctx: Dict[str, Any]) -> List[str]:
+    """Numbers in the assistant text that do not appear anywhere in the cycle context."""
+    allowed = _allowed_numbers(_round(ctx), set())
+    out = []
+    for token in _NUMBER_RE.findall(text or ""):
+        value = float(token.replace(",", ""))
+        if not any(abs(value - a) < 1e-6 for a in allowed):
+            out.append(token)
+    return out
+
+
 def _round(node: Any) -> Any:
     if isinstance(node, float):
         return round(node, 1)
@@ -81,7 +120,30 @@ def _fmt_gbp(value: Any) -> str:
         return str(value)
 
 
+def _det_branch(question: str) -> Optional[str]:
+    """Which deterministic_answer branch would fire for this question, or None for the generic lead.
+    Uses the same precision rules as the retrieval router so the fallback never answers off-topic."""
+    intent = _structured_intent(question)
+    if intent:
+        return intent[0]
+    q = question.lower()
+    if any(word in q for word in ("amazon", "surge", "glance")):
+        return "amazon"
+    if any(word in q for word in ("pending", "decided", "cycle", "summary", "status")):
+        return "cycle"
+    return None
+
+
+def _deterministic_or_honest(question: str, ctx: Dict[str, Any]) -> str:
+    """Deterministic answer when the question maps to a known branch; otherwise an honest
+    'not in project data' message instead of an off-topic keyword answer."""
+    if _det_branch(question) is None:
+        return "The project data does not contain this answer, and the knowledge-base fallback is unavailable."
+    return deterministic_answer(question, ctx)
+
+
 def deterministic_answer(question: str, ctx: Dict[str, Any]) -> str:
+    branch = _det_branch(question)
     q = question.lower()
     cycle = ctx.get("cycle") or {}
     queue = ctx.get("exception_queue_top") or []
@@ -90,33 +152,45 @@ def deterministic_answer(question: str, ctx: Dict[str, Any]) -> str:
     phasing = ctx.get("phasing_first_month") or []
     safety = ctx.get("safety_stock") or {}
     amazon = ctx.get("amazon_pipeline") or {}
-    if any(word in q for word in ("otif", "fine", "penalty", "exposure")):
+    if branch == "otif":
         top = otif_ctx.get("top") or []
         rows = [f"Item {r.get('item_id')}: penalty {_fmt_gbp(r.get('penalty_gbp'))}, shortfall {_fmt_num(r.get('shortfall_qty'))} units." for r in top[:3]]
         return "OTIF exposure: " + _fmt_num(otif_ctx.get("items_at_risk")) + " item-months at risk, estimated penalty " + _fmt_gbp(otif_ctx.get("total_penalty_gbp")) + (" Top drivers: " + " ".join(rows) if rows else ".")
-    if any(word in q for word in ("quality", "warning", "data")):
+    if branch == "quality":
         if not quality:
             return "No data-quality warnings are present in the current cycle context."
         return "Data-quality warnings: " + "; ".join(str(w) for w in quality[:5])
-    if any(word in q for word in ("phasing", "delivery", "deliveries", "b2b", "amazon")) and "forecast" not in q:
+    if branch == "phasing":
         if not phasing:
             return "No phasing rows are available for the first forecast month in the current context."
         rows = [f"{r.get('channel')}: demand {_fmt_num(r.get('demand'))}, expected delivery {_fmt_num(r.get('expected_delivery'))}, shift {_fmt_num(r.get('shift'))}." for r in phasing[:6]]
         return "First-month phasing: " + " ".join(rows)
-    if any(word in q for word in ("safety", "stock", "inventory")):
+    if branch == "safety":
         if not safety:
             return "Safety-stock outputs are not available yet for this cycle."
         return "Safety stock summary: A items " + str(safety.get("a_items")) + "; all items " + str(safety.get("all_items")) + "; target reduction " + str(safety.get("target_reduction_pct")) + "."
-    if any(word in q for word in ("amazon", "surge", "glance")):
+    if branch == "amazon":
         return "Amazon pipeline context: as of " + str(amazon.get("as_of")) + ", surge items " + _fmt_num(amazon.get("surge_items")) + ", runtime " + str(amazon.get("total_seconds")) + " seconds."
-    if any(word in q for word in ("exception", "risk", "value", "top", "why")):
+    if branch == "exception":
         if not queue:
             return "There are no exception-queue rows in the current context."
         ranked = sorted(queue, key=lambda r: abs(float(r.get("value_delta_gbp") or 0.0)), reverse=True)
         rows = [f"Item {r.get('item_id')} ({r.get('product_id')}, {r.get('channel')}): value delta {_fmt_gbp(r.get('value_delta_gbp'))}, risk {r.get('risk_type')}, current final {_fmt_num(r.get('current_final'))}." for r in ranked[:3]]
         return "Top exceptions: " + " ".join(rows)
-    if any(word in q for word in ("pending", "decided", "cycle", "summary", "status")):
+    if branch == "fva":
+        fva = ctx.get("fva")
+        if not fva:
+            return "No matured overrides yet, so there is no FVA position to report for this cycle."
+        return f"FVA: {fva['matured_overrides']} matured overrides; planner overrides are {fva['fva_pts']:+.1f} points versus the ML baseline (positive means the overrides added value)."
+    if branch == "cycle":
         return "Current cycle " + str(cycle.get("cutoff")) + " plans from " + str(cycle.get("first_month")) + ". In-scope SKUs: " + _fmt_num(cycle.get("in_scope_skus")) + "; exceptions: " + _fmt_num(cycle.get("exceptions_requiring_review")) + "; pending decisions: " + _fmt_num(cycle.get("pending_decisions")) + "; planned value: " + _fmt_gbp(cycle.get("planned_value_gbp")) + "."
+    if branch == "top_products":
+        channel = next((ch for ch in CHANNELS if ch in q), None)
+        rows = (ctx.get("top_products") or {}).get(channel or "all") or []
+        if not rows:
+            return "No monthly demand rows are available to rank best-selling products in the current context."
+        return "Best-selling items by planned demand: " + " ".join(
+            f"Item {r['item_id']} ({r['channel']}): {_fmt_num(r['demand'])} units." for r in rows[:5])
     lead = "Current cycle " + str(cycle.get("cutoff")) + " has " + _fmt_num(cycle.get("pending_decisions")) + " pending decisions and planned value " + _fmt_gbp(cycle.get("planned_value_gbp")) + "."
     top = ""
     if queue:
@@ -150,7 +224,17 @@ def suggested_actions(question: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]
                         "detail": "Open Scenarios with your question preloaded as a generation prompt."})
     if any(word in q for word in ("phasing", "delivery", "deliveries", "supply")):
         actions.append({"type": "review_phasing", "title": "Review supply & phasing",
-                        "detail": "Open Supply & risk for delivery phasing review."})
+                        "detail": "Open Supply & Risk for delivery phasing review."})
+    if any(word in q for word in ("operation", "cycle", "run", "pipeline", "agent", "job", "orchestration")) and ctx.get("operations"):
+        op = ctx["operations"]
+        actions.append({"type": "view_operation", "run_id": op["run_id"],
+                        "title": f"View latest {op['kind'].replace('_', ' ')} run",
+                        "detail": f"Status {op['status']}, {len(op['steps'])} steps."})
+    if any(word in q for word in ("product", "item")) and queue:
+        top = sorted(queue, key=lambda r: abs(float(r.get("value_delta_gbp") or 0.0)), reverse=True)[0]
+        actions.append({"type": "review_exception", "item_id": int(top["item_id"]),
+                        "title": f"View item {top['item_id']} details",
+                        "detail": f"{_fmt_gbp(top.get('value_delta_gbp'))} value delta, {top.get('risk_type')} risk."})
     return actions
 
 
@@ -209,7 +293,8 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         """Research -> Process -> Forecast -> Inform trace for one item (read-only compute)."""
         from app.forecasting import agent as forecast_agent
         try:
-            return forecast_agent.run(state["svc"], item_id, method, llm)
+            return forecast_agent.run(state["svc"], item_id, method, llm,
+                                      history=ledger.overrides(cutoff=state["svc"].cutoff, item_id=item_id, limit=3))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc).strip("'"))
         except ValueError as exc:
@@ -280,7 +365,8 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         if runs is None:
             return {"runs": [], "nodes": []}
         from app.orchestration.graph import NODES
-        return {"runs": runs.recent(limit), "nodes": [n for n, _ in NODES] + ["human_review"]}
+        recent = [{**r, "steps": _step_summaries(r.get("steps"))} for r in runs.recent(limit)]
+        return {"runs": recent, "nodes": [n for n, _ in NODES] + ["human_review"]}
 
     @app.get("/api/v1/cycles/runs/{run_id}")
     def run_detail(run_id: str, user=Depends(require(*all_roles))):
@@ -290,7 +376,8 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         run = runs.get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        return {**run, "quality_warnings": state["svc"].meta.get("quality_warnings", [])}
+        return {**run, "steps": _step_summaries(run.get("steps")),
+                "quality_warnings": state["svc"].meta.get("quality_warnings", [])}
 
     @app.post("/api/v1/admin/cycles/rerun-node")
     def rerun_node(payload: RerunNodeRequest, user=Depends(require(admin))):
@@ -380,6 +467,23 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         ph = svc.phasing_summary(dec)["rows"]
         o = otif_rows()
         ss = svc.extras.get("safety_meta") or {}
+        df = override_fva(pd.DataFrame(ledger.overrides(cutoff=svc.cutoff)), svc.actuals, group_by=("planner_id",))
+        fva = None
+        if not df.empty:
+            vol = float(df["volume"].sum())
+            if vol > 0:
+                fpe_ml = float((df["fpe_ml"] * df["volume"]).sum() / vol)
+                fpe_pl = float((df["fpe_planner"] * df["volume"]).sum() / vol)
+                fva = {"matured_overrides": int(df["n_overrides"].sum()), "fva_pts": fpe_ml - fpe_pl}
+        ops = None
+        if runs is not None:
+            recent = runs.recent(1)
+            if recent:
+                r = recent[0]
+                ops = {"run_id": r.get("id"), "status": r.get("status"), "kind": r.get("kind"),
+                       "started_at": r.get("started_at"),
+                       "steps": [{"node": s.get("node"), "status": s.get("status"), "seconds": s.get("seconds")}
+                                  for s in r.get("steps", [])]}
         return {
             "cycle": {k: s[k] for k in ("cutoff", "first_month", "total_catalog_skus", "in_scope_skus", "autopilot_approved_skus",
                                         "exceptions_requiring_review", "planner_led_skus", "pending_decisions", "decided",
@@ -389,6 +493,12 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
             "phasing_first_month": [r for r in ph if r["month"] == svc.first_month],
             "otif": {"items_at_risk": len(o["rows"]), "total_penalty_gbp": o["total_penalty_gbp"], "top": o["rows"][:5]},
             "safety_stock": {k: ss.get(k) for k in ("a_items", "all_items", "target_reduction_pct")} if ss else None,
+            "fva": fva,
+            "operations": ops,
+            "top_products": {"all": svc.top_items_by_demand(None, svc.first_month, 5),
+                              "amazon": svc.top_items_by_demand("amazon", svc.first_month, 5),
+                              "b2b": svc.top_items_by_demand("b2b", svc.first_month, 5),
+                              "d2c": svc.top_items_by_demand("d2c", svc.first_month, 5)},
         }
 
     def _chat_store() -> Any:
@@ -400,6 +510,12 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
     def assistant_history(user=Depends(require(*all_roles))):
         return {"enabled": True, "messages": _chat_store().history(user["username"])}
 
+    @app.get("/api/v1/assistant/providers")
+    def assistant_providers(user=Depends(require(*all_roles))):
+        """Configured LLM providers and their last call status (e.g. Gemini 429 quota, GLM errors)."""
+        from app.narrative.llm import PROVIDER_STATUS
+        return {"providers": PROVIDER_STATUS}
+
     @app.delete("/api/v1/assistant/history")
     def assistant_clear(user=Depends(require(*all_roles))):
         _chat_store().clear(user["username"])
@@ -410,24 +526,67 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         store = _chat_store()
         c = context()
         history = [(m["role"], m["text"]) for m in store.history(user["username"], 8)]
-        prompt = f"CONTEXT JSON:\n{json.dumps(_round(c), default=str)}\n\nQUESTION: {payload.question}"
+        retrieval = retrieve(payload.question, state["svc"], ledger, settings.hybrid_search)
         store.add(user["username"], "user", payload.question)
         actions = suggested_actions(payload.question, c)
 
         async def events():
             parts: List[str] = []
+            deterministic = False
             try:
-                if llm is not None and hasattr(llm, "stream"):
-                    async for chunk in llm.stream(ASSISTANT_PROMPT, history, prompt):
-                        parts.append(chunk)
-                        yield f"data: {json.dumps({'delta': chunk})}\n\n"
-                else:
-                    answer = deterministic_answer(payload.question, c)
+                yield f"data: {json.dumps({'tier': retrieval.tier})}\n\n"
+                if retrieval.sources:
+                    yield f"data: {json.dumps({'sources': [{'kind': s.kind, 'title': s.title, 'snippet': s.snippet[:160]} for s in retrieval.sources]})}\n\n"
+                try:
+                    if retrieval.tier == "general_knowledge":
+                        concept = concept_answer(payload.question)
+                        if llm is not None and hasattr(llm, "stream"):
+                            prompt = payload.question
+                            if concept:
+                                prompt = f"REFERENCE MATERIAL (ground your answer in it):\n{concept}\n\nQUESTION: {payload.question}"
+                            async for chunk in llm.stream(GENERAL_KNOWLEDGE_PROMPT, history, prompt):
+                                parts.append(chunk)
+                                yield f"data: {json.dumps({'delta': chunk})}\n\n"
+                        else:
+                            answer = concept or "The project data does not contain this answer, and no knowledge-base fallback is configured."
+                            deterministic = True
+                            parts.append(answer)
+                            yield f"data: {json.dumps({'delta': answer})}\n\n"
+                    else:
+                        evidence = "\n".join(f"[{s.kind}] {s.title}: {s.snippet}" for s in retrieval.sources if s.kind in ("docs", "ledger"))
+                        prompt = f"CONTEXT JSON:\n{json.dumps(_round(c), default=str)}\n\n"
+                        if evidence:
+                            prompt += f"PROJECT EVIDENCE:\n{evidence}\n\n"
+                        prompt += f"QUESTION: {payload.question}"
+                        if llm is not None and hasattr(llm, "stream"):
+                            async for chunk in llm.stream(ASSISTANT_PROMPT, history, prompt):
+                                parts.append(chunk)
+                                yield f"data: {json.dumps({'delta': chunk})}\n\n"
+                        else:
+                            answer = _deterministic_or_honest(payload.question, c)
+                            deterministic = True
+                            parts.append(answer)
+                            yield f"data: {json.dumps({'delta': answer})}\n\n"
+                except Exception as exc:
+                    log.warning("assistant llm failed (%s), using deterministic fallback", type(exc).__name__)
+                    if retrieval.tier == "general_knowledge":
+                        answer = concept_answer(payload.question) or "The knowledge-base fallback is temporarily unavailable, and the project data does not contain this answer."
+                    else:
+                        answer = _deterministic_or_honest(payload.question, c)
+                    deterministic = True
                     parts.append(answer)
                     yield f"data: {json.dumps({'delta': answer})}\n\n"
                 if actions:
                     yield f"data: {json.dumps({'actions': actions})}\n\n"
-                store.add(user["username"], "assistant", "".join(parts))
+                text = "".join(parts)
+                # Deterministic answers are by construction from cycle data, so the number check is skipped;
+                # general-knowledge answers are exempt from the cycle-data check.
+                bad = [] if deterministic or retrieval.tier != "project" else _unverifiable_numbers(text, c)
+                if bad:
+                    note = f" Note: {', '.join(bad[:3])} could not be verified against the cycle data."
+                    text += note
+                    yield f"data: {json.dumps({'delta': note})}\n\n"
+                store.add(user["username"], "assistant", text)
                 yield f"data: {json.dumps({'done': True})}\n\n"
             except Exception as exc:
                 log.warning("assistant failed: %s", type(exc).__name__)

@@ -88,10 +88,132 @@ Goal: close the remaining PRD gaps so Supply & Risk and Operations are complete,
 
 ---
 
+## 4. Hybrid Search Fallback (Project Data -> Gemini Knowledge Base)
+
+**Status: Phase A (Tier 1) and Phase B (Tier 2) implemented Oct 2026.** `backend/app/retrieval/hybrid.py` (structured router + lexical doc/ledger index + answerability gate), `HYBRID_SEARCH` flag in `config.py` (`off|tier1|tier2`, default `tier1`), tier/sources SSE events + Gemini knowledge-base fallback in `assistant_stream`, tier badge + sources in `CopilotPage.jsx`. Phase C (evaluation metrics) pending.
+
+Goal: when the Co-Pilot cannot answer from the project's own data, fall back to the configured Gemini model's own knowledge base — with an explicit answerability gate, provenance labeling, and safety controls. No vector database and no external search provider are required.
+
+### 4.1 Tier 1 — project data sources (authoritative, always first)
+- **Structured live-cycle data**: `DataService` (triage, monthly, actuals, meta), the audit ledger (SQLite, hash-chained overrides + planner comments), run store (cycle runs, node details), scenarios, notes/schedules.
+- The existing assistant context snapshot (`context()` in `backend/app/api/extended.py`) stays the primary structured source.
+- **Project documents**: `README.md`, `DEVELOPMENT_PLAN.md`, `ENHANCEMENT_PLAN.md`, `memory/PRD.md` — for "how does the system work" questions.
+- **Retrieval without a vector DB**:
+  - *Structured query router*: extract entities/metrics (item id, product, channel, month, metric names) and answer directly from `DataService`/ledger (exact, deterministic).
+  - *Lexical full-text search*: SQLite FTS5 index over project docs + run store + ledger comments (simple keyword scoring).
+  - *Optional later*: local embeddings (sentence-transformers) + reranking only if lexical recall proves insufficient — not required for Phase A/B.
+
+### 4.2 Answerability gate (when to fall back)
+- Tier 1 is "sufficient" when: a structured lookup returns the requested fields, OR lexical search relevance is above a threshold, OR the LLM (given retrieved evidence plus an explicit "insufficient evidence" instruction) says it can answer.
+- Otherwise -> Tier 2. The gate result is returned to the UI (`tier: project|general_knowledge|none`) so the planner sees why the answer may be general.
+
+### 4.3 Tier 2 — Gemini knowledge base (fallback, non-authoritative)
+- When the answerability gate says Tier 1 is insufficient, ask the configured Gemini model directly to answer from its own knowledge base — no external search provider, no web fetch, no new network dependency beyond the Gemini API already in use.
+- A dedicated fallback system prompt instructs the model to:
+  - answer from general knowledge only, and clearly label the answer as "general knowledge — not from the project's data";
+  - never invent project-specific figures (item ids, quantities, cutoffs, FVA/OTIF numbers) — those must come from Tier 1;
+  - state uncertainty when the knowledge is dated or uncertain (e.g., "as of my knowledge cutoff").
+- The UI shows a tier badge (`project` vs `general knowledge`) so the planner can tell grounded answers from general ones.
+
+### 4.4 Integration with the assistant stream
+- New `retrieve(question)` step in `assistant_stream` (`backend/app/api/extended.py`): Tier 1 first; if the gate says insufficient, Tier 2.
+- Tier 1 evidence is appended to the prompt with provenance tags; context size is bounded (top-k snippets, truncation).
+- Tier 2 reuses the same stream with a different system prompt (general-knowledge mode) and no project context.
+- Fact-check: the existing number check stays for Tier 1; Tier 2 answers are exempt from the telemetry check but must carry the "general knowledge" label.
+- Deterministic fallback preserved when both tiers fail.
+- **Local concept knowledge base** (`app/narrative/concepts.py`): general-knowledge concept questions (Croston's method, exponential smoothing, WAPE/MAPE, safety stock, S&OP, ...) are routed to the `general_knowledge` tier with a `concept` source (never the project docs) and answered deterministically with references when the LLM chain is down; the reference text also grounds the LLM prompt when it is up.
+
+### 4.5 Safety, privacy, ops
+- Feature flag `HYBRID_SEARCH` (default: Tier 1 on, Tier 2 off) — the knowledge-base fallback is opt-in.
+- No new external calls: Tier 2 reuses the existing Gemini API; nothing else leaves the system.
+- The Tier 2 prompt forbids fabricating project-specific figures; the label plus the existing number guardrail enforce it.
+- Logging: tier used, latency — no query content beyond the question.
+
+### 4.6 Tests
+- Project-first precedence: Tier 2 is not invoked when Tier 1 answers.
+- Fallback: Tier 2 is invoked only when the gate says insufficient.
+- Labeling: Tier 2 answers are labeled "general knowledge" and never present project figures as facts.
+- Resilience: Gemini timeout/error -> deterministic fallback, no 500.
+- RBAC unchanged (all roles can read; planner/admin write flows untouched).
+
+### 4.7 Sequencing
+- **Phase A (Tier 1 only)**: query router + FTS5 index + answerability gate; no fallback. Highest value, zero external risk.
+- **Phase B (Tier 2 behind flag)**: Gemini knowledge-base fallback with the general-knowledge label.
+- **Phase C (evaluation)**: answerability rate, fallback rate, label accuracy, latency; add embeddings/reranking only if lexical recall is insufficient.
+
+Each phase ends with the backend test suite green and the frontend production build passing.
+
+---
+
+## 5. Answer Accuracy (Co-Pilot)
+
+**Trigger:** "Can you research the best selling products in Amazon?" returned the first-month phasing summary instead of an answer about best-selling products.
+
+**Status: implemented Oct 2026** (see 5.2/5.3; DeepSeek replaced by GLM `glm-5.2` via `GLM_API_KEY`).
+
+### 5.1 Root causes (verified Oct 2026)
+- **Intent misclassification (primary)**: `_structured_intent()` in `backend/app/retrieval/hybrid.py` matched the single word "amazon" to the `phasing` intent, so the answerability gate locked the question to the project tier with the wrong intent. Channel words ("amazon", "b2b", "d2c") are qualifiers, not phasing triggers.
+- **LLM chain unavailable (compounding)**: server log shows `GeminiClient failed (ClientError)` [429 free-tier quota] -> `DeepSeekClient failed (HTTPStatusError)` [402 Payment Required, no credit] -> deterministic fallback. The keyword-based `deterministic_answer` (`backend/app/api/extended.py:126-130`) then produced the phasing summary because "amazon" is also a trigger word there.
+- **No "top products" intent**: the project data can answer this (monthly demand has a channel dimension -> top items by Amazon demand), but neither the router nor `deterministic_answer` supports a ranking-by-channel intent.
+- **Misleading verification note**: the phasing figures (107,647 / 7,229 / 16,926) were flagged "could not be verified against the cycle data" even though they come from `phasing_first_month`; `_allowed_numbers(_round(ctx))` does not include those fields, so the note is a false negative.
+- **Ambiguity**: "research ... in Amazon" can mean general research (external/general knowledge) or top items by Amazon channel demand (project data); the gate cannot distinguish and defaulted to neither.
+
+### 5.2 Fixes
+- **Precision intent matching** (`hybrid.py`):
+  - Phasing requires >= 2 phasing-specific tokens ("phasing", "delivery", "deliveries", "expected delivery", "b2b demand", "shift") or a channel plus one phasing word; channel words alone never trigger phasing.
+  - New `top_products` intent: ranking words ("best", "top", "highest", "most", "worst", "selling") + product words + optional channel -> answered from monthly demand via `DataService.top_items_by_demand()` (top-N items by planned demand for the channel).
+  - `research`/general-knowledge questions need no explicit intent: without a project entity they fall through the lexical gate to the `general_knowledge` tier.
+- **Honest fallback**: `_det_branch()` (`extended.py`) reuses the router's precision rules; when the LLM chain fails and no branch matches, the answer is "The project data does not contain this answer..." instead of an off-topic keyword answer. `deterministic_answer` is gated by intent match.
+- **LLM chain health**: DeepSeek replaced by GLM (`GlmClient`, `glm-5.2`, `GLM_API_KEY`/`GLM_MODEL`/`GLM_BASE_URL`). `FailoverClient` records per-provider status; `GET /api/v1/assistant/providers` exposes configured providers + last error (e.g. Gemini 429 quota, GLM 429 no balance).
+- **Number-note fix**: the "could not be verified" note is skipped when the answer came from the deterministic path (deterministic answers are by construction from cycle data).
+
+### 5.3 Tests
+- Intent precision: "best selling products in Amazon" -> `top_products` or `general_knowledge`, never `phasing`.
+- Honest fallback: off-topic question with the LLM chain down -> honest message, not a phasing summary.
+- Number note: deterministic phasing answer -> no "could not be verified" note.
+- Live: assistant stream returns a relevant tier and answer for the trigger question.
+
+---
+
+## 6. Co-Pilot summaries, Operations routing, Dynamic Safety Stock, agent notifications, FVA visibility (Oct 2026)
+
+**Status: implemented Oct 2026.** User request: Co-Pilot summary + details button; Operations "Open" -> Workbench summary; Dynamic Safety Stock functional; rename "Supply & risk" -> "Supply & Risk"; agent work as clickable notifications; FVA scorecard not empty.
+
+### 6.1 Co-Pilot summary + details button
+- `suggested_actions()` (`backend/app/api/extended.py`) now emits a `view_operation` action (latest cycle run id + status/steps) for operation/cycle/run/pipeline questions, and a `review_exception` item action for product/item questions. The assistant context gained an `operations` block (latest run summary from the runs store).
+- `CopilotPage.jsx` renders a **View details** button under assistant messages that carry an item or run action; clicking expands an inline `DetailView` (item: channel/phase/risk/value delta/M1 plan; run: status, started-at, per-node chips, error) via `api.item` / `api.runDetail`. Existing action chips still navigate to the Workbench/Operations pages.
+
+### 6.2 Operations -> Workbench routing
+- `App.jsx` `navigateAction` handles `view_operation` (sets `operationsRunId`, opens Operations) and shows the action title+detail as the notice banner. Item actions now also show their title/detail summary on the Workbench.
+- `OperationsPage.jsx` accepts `initialRunId` and opens that run's detail panel on mount.
+
+### 6.3 Dynamic Safety Stock functional
+- Root cause: the `quantile_bands.parquet` / `quantile_calibration.csv` / `safety_stock.parquet` artifacts were missing from `reports/` (the `bands_safety` node had never run through the orchestration runner), so `load_extras()` returned `None` and the API answered `available: false`.
+- Fix: ran the `quantiles` and `safety_stock` pipelines (they are part of the monthly cycle) and then the full monthly cycle; the endpoint now returns `available: true` with 25 top-saving items, A-item dynamic SS 169,750 units, holding reduction 69%.
+
+### 6.4 Rename
+- Header nav label and all user-facing notices changed from "Supply & risk" to "Supply & Risk".
+
+### 6.5 Agent work as notifications
+- `backend/app/orchestration/jobs.py` collects each node step during a cycle run and emits one `agent_work` notification per step (`Agent: <label>` + one-line summary of the node's detail + seconds), linked to `operations` with the `run_id`. Clicking a notification navigates to Operations and opens that run's summary (`NotificationBell` now passes the full record; `App.handleNotification` sets `operationsRunId`).
+
+### 6.6 FVA scorecard visibility
+- Root cause: not a bug — actuals end at the cutoff (2026-02-01) while the 7 current overrides target 2026-03-01, so no override has matured; monthly FVA is legitimately empty until target-month actuals arrive. Daily calculation is not possible (actuals are monthly).
+- Fix: `GET /api/v1/fva` now also returns `pending_overrides` + `pending` (overrides awaiting actuals, grouped by planner/reason, with volume). `ScorecardPage.jsx` renders a "Pending — awaiting actuals" table when nothing has matured, so the scorecard is never blank.
+
+### 6.7 Tests
+- `test_fva_pending`, `test_assistant_view_operation`, `test_agent_work_notifications` added; `test_scenario_promote` hardened to base its edit on the consensus value (an existing override on item 106205 exactly cancelled the old `final + 100` edit). Full suite green; frontend production build passes.
+
+### 6.8 Run-detail readability
+- The Run Detail panel showed each step's raw `detail` JSON (e.g. `{"tables":20,"rows":33624816}`). Both run endpoints (`GET /api/v1/cycles/runs` and `/runs/{id}`) now attach a plain-language `summary` per step via `_step_summaries()` (`extended.py`), reusing the `_node_summary` formatter from `jobs.py` (same wording as the agent notifications). `OperationsPage.jsx` renders `s.summary` instead of `JSON.stringify(s.detail)`; the node-track hover tooltip uses it too.
+
+---
+
 ## Sequencing
 
 1. **Agentic forecasting** (largest, self-contained) — backend agent + endpoint, then UI.
-2. **Urgent co-pilot** (small, high value) — classifier + fast endpoint + UI.
+2. ~~Urgent co-pilot~~ — implemented then fully reverted at the user's request (Oct 2026); do not reintroduce.
 3. **Supply & Risk / Operations completion** — incremental panels and the scenario-promotion ledger action.
+4. **Hybrid search fallback** — Phase A (project-data retrieval + answerability gate), then Phase B (Gemini knowledge-base fallback behind the `HYBRID_SEARCH` flag).
 
 Each step ends with the backend test suite green and the frontend production build passing.

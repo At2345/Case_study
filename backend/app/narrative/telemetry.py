@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from app.forecasting.agent import promo_overlap
+
 
 def _num(v: Any) -> Optional[float]:
     try:
@@ -36,10 +38,12 @@ SIGNALS = {
 }
 
 
-def build_telemetry(detail: Dict[str, Any], phasing: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_telemetry(detail: Dict[str, Any], phasing: List[Dict[str, Any]], history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Build the telemetry JSON from an item-detail payload and its phasing rows.
 
     Free text (the deterministic narrative) and identifiers are deliberately left out.
+    `history` is the item's prior ledger decisions (newest first); the last three are
+    included so the model can reference what the planner already decided.
     """
     item = detail["item"]
     first = detail["plan"][0] if detail.get("plan") else None
@@ -66,4 +70,13 @@ def build_telemetry(detail: Dict[str, Any], phasing: List[Dict[str, Any]]) -> Di
             "booked_units": _units(p["booked"]), "moving_to_later_months_units": _units(p["booked_shifted"]),
             "carry_in_units": _units(p["carry_in"]), "expected_delivery_units": _units(p["expected_delivery"]),
         }
+    prior = [r for r in (history or []) if r.get("reason_code")][-3:]
+    if prior:
+        out["prior_decisions"] = [{
+            "month": r.get("target_month"), "submitted_units": _units(r.get("submitted_quantity")),
+            "reason": r.get("reason_code"), "comment": (r.get("planner_comment") or "")[:120],
+        } for r in prior]
+    promos = promo_overlap(int(item.get("item_id") or 0), detail.get("first_month") or "")
+    if promos:
+        out["promo_overlap"] = promos
     return out
