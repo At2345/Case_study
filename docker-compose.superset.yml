@@ -1,0 +1,40 @@
+# Apache Superset for the S&OP workbench (single container, SQLite metadata).
+#
+# 1. Build the mart:      $env:PYTHONPATH="backend"; python -m app.bi.export_mart
+# 2. Start Superset:      docker compose -f docker-compose.superset.yml up -d
+# 3. Bootstrap it:        python superset/bootstrap.py
+# 4. Open the workbench:  http://localhost:5173 -> "BI dashboards"
+#
+# Superset UI: http://localhost:8088 (admin / admin by default; override with SUPERSET_ADMIN_PASSWORD).
+services:
+  superset:
+    image: apache/superset:4.1.1
+    container_name: sop-superset
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-sop-superset-dev-secret-change-me}
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      ADMIN_USERNAME: ${SUPERSET_ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+      ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@sop.local}
+    volumes:
+      - ./var/bi_mart.db:/app/bi_mart.db:ro
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - superset_home:/app/superset_home
+    command: >
+      /bin/sh -c "
+      superset db upgrade &&
+      superset fab create-admin --username $${ADMIN_USERNAME} --firstname Superset --lastname Admin
+      --email $${ADMIN_EMAIL} --password $${ADMIN_PASSWORD} || true &&
+      superset init &&
+      gunicorn --bind 0.0.0.0:8088 --workers 2 --timeout 120 'superset.app:create_app()'
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  superset_home:

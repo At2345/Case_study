@@ -72,9 +72,10 @@ const qs = (params) => {
 export const api = {
   async login(username, password) {
     const data = await request("/api/v1/auth/login", { method: "POST", body: { username, password } });
+    const user = { username: data.username, role: data.role, tenant: data.tenant };
     sessionStorage.setItem(TOKEN_KEY, data.access_token);
-    sessionStorage.setItem(USER_KEY, JSON.stringify({ username: data.username, role: data.role }));
-    return { username: data.username, role: data.role };
+    sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+    return user;
   },
   logout: clearSession,
   summary: () => request("/api/v1/summary"),
@@ -104,7 +105,7 @@ export const api = {
   auditVerify: () => request("/api/v1/audit/verify"),
   assistantHistory: () => request("/api/v1/assistant/history"),
   assistantClear: () => request("/api/v1/assistant/history", { method: "DELETE" }),
-  async assistantStream(question, onDelta, onActions, onMeta) {
+  async assistantStream(question, onDelta, onActions, onMeta, onSuggestions) {
     const res = await request("/api/v1/assistant/stream", { method: "POST", body: { question }, raw: true });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -122,6 +123,7 @@ export const api = {
         if (msg.error) throw new ApiError(503, msg.error);
         if (msg.delta) onDelta(msg.delta);
         if (msg.actions && onActions) onActions(msg.actions);
+        if (msg.suggestions && onSuggestions) onSuggestions(msg.suggestions);
         if (onMeta && (msg.tier || msg.sources)) onMeta({ tier: msg.tier, sources: msg.sources });
       }
     }
@@ -131,6 +133,35 @@ export const api = {
   notifications: () => request("/api/v1/notifications"),
   readNotification: (id) => request(`/api/v1/notifications/${id}/read`, { method: "POST" }),
   readAllNotifications: () => request("/api/v1/notifications/read-all", { method: "POST" }),
+  tasks: () => request("/api/v1/tasks"),
+  runTask: (id) => request(`/api/v1/tasks/${id}/run`, { method: "POST" }),
+  mcpServers: () => request("/api/v1/mcp/servers"),
+  biStatus: () => request("/api/v1/bi/status"),
+  biDashboard: () => request("/api/v1/bi/dashboard"),
+  biKpiTree: () => request("/api/v1/bi/kpi-tree"),
+  biMetrics: () => request("/api/v1/bi/metrics"),
+  biDiagnostics: (series) => request(`/api/v1/bi/diagnostics${qs({ series })}`),
+  biContracts: () => request("/api/v1/bi/contracts"),
+  biFinops: (days) => request(`/api/v1/bi/finops${qs({ days })}`),
+  biServing: (days) => request(`/api/v1/bi/serving${qs({ days })}`),
+  biTransport: (tables) => request(`/api/v1/bi/transport${qs({ tables: (tables || []).join(",") })}`),
+  biExportColumnar: async (table, format) => {
+    const res = await request(`/api/v1/bi/export/columnar${qs({ table, format })}`, { raw: true });
+    return res.blob();
+  },
+  biAnnotations: (params) => request(`/api/v1/bi/annotations${qs(params)}`),
+  biAnnotate: (body) => request("/api/v1/bi/annotations", { method: "POST", body }),
+  biActions: () => request("/api/v1/bi/actions"),
+  biProposeAction: (body) => request("/api/v1/bi/actions", { method: "POST", body }),
+  biDecideAction: (id, body) => request(`/api/v1/bi/actions/${id}/decide`, { method: "POST", body }),
+  biWritebackVerify: () => request("/api/v1/bi/writeback/verify"),
+  biAsk: (question) => request("/api/v1/bi/ask", { method: "POST", body: { question } }),
+  biExport: () => request("/api/v1/bi/export", { method: "POST" }),
+  createMcpServer: (body) => request("/api/v1/mcp/servers", { method: "POST", body }),
+  updateMcpServer: (id, body) => request(`/api/v1/mcp/servers/${id}`, { method: "PUT", body }),
+  deleteMcpServer: (id) => request(`/api/v1/mcp/servers/${id}`, { method: "DELETE" }),
+  testMcpServer: (id) => request(`/api/v1/mcp/servers/${id}/test`, { method: "POST" }),
+  mcpCalls: (limit = 50) => request(`/api/v1/mcp/calls${qs({ limit })}`),
   scenarios: () => request("/api/v1/scenarios"),
   generateScenario: (prompt) => request("/api/v1/scenarios/generate", { method: "POST", body: { prompt } }),
   scenarioSuggestions: () => request("/api/v1/scenarios/suggestions"),

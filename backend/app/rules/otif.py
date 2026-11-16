@@ -81,7 +81,8 @@ def _by_customer(svc, risk: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[D
         return []
     if ob.empty or ob["customer_id"].isna().all():
         return []
-    lines = prepare_lines(ob)
+    risk_ids = {r["item_id"] for r in risk}
+    lines = prepare_lines(ob[ob["item_id"].isin(risk_ids)])
     booked = (lines[~lines["cancelled"]].groupby(["item_id", "mm", "customer_id"])[QTY].sum()
               .rename("booked").reset_index())
     booked["month"] = booked["mm"].dt.strftime("%Y-%m-%d")

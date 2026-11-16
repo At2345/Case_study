@@ -89,7 +89,8 @@ def test_assistant_streams_and_keeps_history(tmp_path):
                      store_dir=tmp_path, llm=FakeLlm())
     from app.api import extended
     chats = MemChats()
-    app.router.routes = [r for r in app.router.routes if not getattr(r, "path", "").startswith("/api/v1/assistant")]
+    app.router.routes = [r for r in app.router.routes
+                         if not getattr(r, "path", "").startswith(("/api/v1/assistant", "/api/v1/ai/"))]
     extended.register(app, {"state": {"svc": make_service()}, "ledger": Ledger(tmp_path / "l.db"),
                             "require": lambda *roles: (lambda: {"username": "danny", "role": "planner"}),
                             "decisions": lambda: {}, "all_roles": ("planner",), "chats": chats, "llm": FakeLlm(),
@@ -100,3 +101,10 @@ def test_assistant_streams_and_keeps_history(tmp_path):
     hist = client.get("/api/v1/assistant/history").json()
     assert [m["role"] for m in hist["messages"]] == ["user", "assistant"] and hist["enabled"] is True
     assert client.post("/api/v1/assistant/stream", json={"question": ""}).status_code == 422
+
+    privacy = client.get("/api/v1/ai/privacy").json()
+    assert privacy["masking"]["enabled"] is True
+    assert {r["kind"] for r in privacy["masking"]["rules"]} >= {"email", "phone_uk", "postcode_uk"}
+    assert privacy["zdr"]["attested"] is False
+    assert "prompts" in privacy["counters"] and "findings" in privacy["counters"]
+    assert privacy["limitations"]

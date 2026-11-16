@@ -47,7 +47,7 @@ export default function DisaggregationModal({ productId, month, reasonCodes, can
       <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl p-6 space-y-4">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2"><Split className="h-4 w-4 text-indigo-400" /> Disaggregate a product total</h3>
+            <h3 className="text-base font-bold text-white flex items-center gap-2"><Split className="h-4 w-4 text-indigo-400" /> Disaggregate a product total</h3>
             <p className="text-[11px] text-slate-400 mt-1">{productId} | {monthLabel(month)}. Set the agreed product number; the gap is split across its channel items (F-SOP-01).</p>
           </div>
           <button data-testid="disaggregation-close-btn" onClick={onClose} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>

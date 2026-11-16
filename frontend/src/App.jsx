@@ -10,6 +10,8 @@ import SupplyRiskPage from "./pages/SupplyRiskPage";
 import OperationsPage from "./pages/OperationsPage";
 import CopilotPage from "./pages/CopilotPage";
 import ScenariosPage from "./pages/ScenariosPage";
+import McpPage from "./pages/McpPage";
+import BiPage from "./pages/BiPage";
 import { api, getStoredUser, getToken, onUnauthorized } from "./services/api";
 
 const DEFAULT_FILTERS = { state: "EXCEPTION_REVIEW", channel: "", risk_type: "", pending: "", limit: 50, offset: 0 };
@@ -162,6 +164,8 @@ export default function App() {
       {page === "supply" && <SupplyRiskPage onNavigateAction={navigateAction} />}
       {page === "operations" && <OperationsPage role={user.role} onReloaded={onChanged} onNavigateAction={navigateAction} initialRunId={operationsRunId} />}
       {page === "copilot" && <CopilotPage onNavigateAction={navigateAction} />}
+      {page === "mcp" && user.role === "admin" && <McpPage role={user.role} />}
+      {page === "bi" && <BiPage role={user.role} />}
       {page === "scenarios" && <ScenariosPage user={user} summary={summary} initialPrompt={scenarioPrompt} />}
       {page === "workbench" && <SummaryCards summary={summary} />}
       {page === "workbench" && <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">

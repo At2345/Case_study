@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Trash2, Sparkles, RefreshCw, ArrowRight, Eye } from "lucide-react";
+import { Send, Trash2, Sparkles, RefreshCw, ArrowRight, Eye, Plug } from "lucide-react";
 import { api } from "../services/api";
 import { ErrorNote } from "../components/ui";
 import { fmtGbp, fmtNum } from "../lib/format";
@@ -82,14 +82,50 @@ export default function CopilotPage({ onNavigateAction }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [detailAction, setDetailAction] = useState(null);
+  const [tasks, setTasks] = useState(null);
+  const [taskFilter, setTaskFilter] = useState({ rhythm: "", channel: "", priority: "" });
   const end = useRef(null);
 
   useEffect(() => {
     api.assistantHistory().then((h) => { setMessages((prev) => (prev.length ? prev : h.messages)); setEnabled(h.enabled); }).catch((e) => setError(e.message));
+    api.tasks().then(setTasks).catch((e) => setError(e.message));
   }, []);
   useEffect(() => { if (end.current) end.current.scrollIntoView({ block: "end" }); }, [messages]);
 
   const patchLast = (patch) => setMessages((m) => [...m.slice(0, -1), { ...m[m.length - 1], ...patch }]);
+
+  const downloadBlob = async (fetchBlob, name) => {
+    try {
+      const blob = await fetchBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { setError(e.message); }
+  };
+
+  const runTask = async (id) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.runTask(id);
+      if (r.download === "briefing") await downloadBlob(api.briefing, "sop_briefing.pdf");
+      const taskTitle = (tasks?.tasks || []).find((t) => t.id === id)?.title || "this task";
+      setMessages((m) => [...m, { role: "assistant", text: r.summary, actions: r.actions || [], tier: "project", sources: [], task: true,
+        suggestions: [`Explain ${taskTitle}`, "What is the value at risk this cycle?", "How many exceptions need review?"] }]);
+      api.tasks().then(setTasks).catch(() => {});
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const filteredTasks = (tasks?.tasks || []).filter((t) =>
+    (!taskFilter.rhythm || t.rhythm === taskFilter.rhythm) &&
+    (!taskFilter.channel || t.channel === taskFilter.channel) &&
+    (!taskFilter.priority || t.priority === taskFilter.priority));
 
   const ask = async (q) => {
     const question = (q || input).trim();
@@ -102,7 +138,8 @@ export default function CopilotPage({ onNavigateAction }) {
       await api.assistantStream(question,
         (delta) => setMessages((m) => [...m.slice(0, -1), { ...m[m.length - 1], text: m[m.length - 1].text + delta }]),
         (actions) => patchLast({ actions }),
-        (meta) => patchLast({ tier: meta.tier || null, sources: meta.sources || [] }));
+        (meta) => patchLast({ tier: meta.tier || null, sources: meta.sources || [] }),
+        (suggestions) => patchLast({ suggestions }));
     } catch (e) {
       setError(e.message);
       setMessages((m) => m.slice(0, -1));
@@ -119,11 +156,61 @@ export default function CopilotPage({ onNavigateAction }) {
     <div className="px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6" data-testid="copilot-page">
       <aside className="lg:col-span-4 space-y-3">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <h2 className="text-sm font-bold text-white flex items-center gap-2"><Sparkles className="h-4 w-4 text-indigo-400" /> S&amp;OP co-pilot</h2>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2"><Sparkles className="h-4 w-4 text-indigo-400" /> S&amp;OP co-pilot</h2>
           <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-            Ask about the current cycle. Answers use the live cycle data only: the queue,
+            Ask about the current cycle, or run a fast task below. Answers use the live cycle data only: the queue,
             order-book phasing, OTIF exposure, safety stock and data-quality warnings. Check figures against the workbench before acting.
           </p>
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            <select data-testid="task-filter-rhythm" value={taskFilter.rhythm} onChange={(e) => setTaskFilter({ ...taskFilter, rhythm: e.target.value })}
+              className="bg-slate-950 border border-slate-700 rounded-md px-1.5 py-1 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="">All rhythms</option>
+              {tasks && Object.entries(tasks.rhythms || {}).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <select data-testid="task-filter-channel" value={taskFilter.channel} onChange={(e) => setTaskFilter({ ...taskFilter, channel: e.target.value })}
+              className="bg-slate-950 border border-slate-700 rounded-md px-1.5 py-1 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="">All channels</option>
+              <option value="amazon">Amazon</option>
+              <option value="b2b">B2B</option>
+              <option value="d2c">D2C</option>
+            </select>
+            <select data-testid="task-filter-priority" value={taskFilter.priority} onChange={(e) => setTaskFilter({ ...taskFilter, priority: e.target.value })}
+              className="bg-slate-950 border border-slate-700 rounded-md px-1.5 py-1 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="">All priorities</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Fast tasks</span>
+            <span className="text-[9px] text-slate-500">{filteredTasks.length} shown</span>
+          </div>
+          {filteredTasks.map((t) => (
+            <div key={t.id} data-testid={`fast-task-${t.id}`} className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-200">{t.title}</span>
+                {t.urgent ? (
+                  <span data-testid={`task-urgent-${t.id}`} className="ml-auto px-1.5 py-0.5 bg-rose-950 border border-rose-800 text-rose-300 rounded text-[9px] font-semibold animate-pulse">
+                    {t.attention} urgent
+                  </span>
+                ) : t.attention > 0 ? (
+                  <span className="ml-auto px-1.5 py-0.5 bg-amber-950 border border-amber-800 text-amber-300 rounded text-[9px] font-semibold">{t.attention}</span>
+                ) : null}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">{t.description}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-[9px] text-slate-500">{t.priority} · {tasks?.rhythms?.[t.rhythm] || t.rhythm}</span>
+                <button data-testid={`task-run-${t.id}`} type="button" onClick={() => runTask(t.id)} disabled={busy || !enabled}
+                  className="ml-auto px-2 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 rounded-md text-[10px] font-semibold text-white">
+                  Run
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredTasks.length === 0 && <div className="text-[11px] text-slate-500 px-1">No fast tasks match the filters.</div>}
         </div>
         <div className="space-y-2">
           {SUGGESTIONS.map((s, i) => (
@@ -158,13 +245,14 @@ export default function CopilotPage({ onNavigateAction }) {
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {m.sources.map((s, i) => (
                       <span key={`${s.title}-${i}`} title={s.snippet} data-testid={`copilot-source-${i}`}
-                        className="px-1.5 py-0.5 bg-slate-800 rounded text-[9px] text-slate-400">
+                        className={`px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1 ${s.kind === "mcp" ? "bg-emerald-950 text-emerald-300 border border-emerald-800" : "bg-slate-800 text-slate-400"}`}>
+                        {s.kind === "mcp" && <Plug className="h-2.5 w-2.5" />}
                         {s.title}
                       </span>
                     ))}
                   </div>
                 )}
-                {m.role === "assistant" && onNavigateAction && <ActionChips actions={m.actions} onNavigate={onNavigateAction} />}
+                {m.role === "assistant" && onNavigateAction && <ActionChips actions={m.actions} onNavigate={(a) => (a.type === "run_task" ? runTask(a.task_id) : onNavigateAction(a))} />}
                 {m.role === "assistant" && (m.actions || []).some((a) => a.item_id || a.run_id) && (
                   <div className="mt-2">
                     <button type="button" data-testid={`copilot-details-btn-${i}`}
@@ -176,6 +264,16 @@ export default function CopilotPage({ onNavigateAction }) {
                       const a = (m.actions || []).find((x) => x.item_id || x.run_id);
                       return a ? <DetailView action={a} onClose={() => setDetailAction(null)} /> : null;
                     })()}
+                  </div>
+                )}
+                {m.role === "assistant" && m.suggestions && m.suggestions.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5" data-testid="copilot-suggestions">
+                    {m.suggestions.map((s, i) => (
+                      <button key={`${s}-${i}`} type="button" data-testid={`copilot-followup-${i}`} onClick={() => ask(s)} disabled={busy || !enabled}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md text-[10px] font-semibold text-slate-300 disabled:opacity-50">
+                        {s}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

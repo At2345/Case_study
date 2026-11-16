@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 
+from app.bi.tenancy import DEFAULT_TENANT, TenantError, normalise
 from app.models.enums import Role
 
 MIN_SECRET_LENGTH = 32
@@ -43,7 +44,7 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 class UserStore:
-    """JSON file of {username: {role, password_hash}}. Passwords are never stored in clear text."""
+    """JSON file of {username: {role, tenant, password_hash}}. Passwords are never stored in clear text."""
 
     def __init__(self, path, iterations: int = DEFAULT_ITERATIONS) -> None:
         self.path = Path(path)
@@ -53,12 +54,14 @@ class UserStore:
             self._users = json.loads(self.path.read_text(encoding="utf-8"))
         self._dummy_hash = hash_password(secrets.token_hex(8), iterations)
 
-    def add_user(self, username: str, role: str, password: str) -> None:
+    def add_user(self, username: str, role: str, password: str,
+                 tenant: str = DEFAULT_TENANT) -> None:
         if role not in {r.value for r in Role}:
             raise ValueError(f"role must be one of {[r.value for r in Role]}")
         if len(password) < MIN_PASSWORD_LENGTH:
             raise ValueError(f"password must have at least {MIN_PASSWORD_LENGTH} characters")
-        self._users[username] = {"role": role, "password_hash": hash_password(password, self.iterations)}
+        self._users[username] = {"role": role, "tenant": normalise(tenant),
+                                 "password_hash": hash_password(password, self.iterations)}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._users, indent=2), encoding="utf-8")
 
@@ -66,25 +69,36 @@ class UserStore:
         user = self._users.get(username)
         # verify against a dummy hash for unknown users so timing does not reveal valid usernames
         ok = verify_password(password, user["password_hash"] if user else self._dummy_hash)
-        return {"username": username, "role": user["role"]} if (user and ok) else None
+        if not (user and ok):
+            return None
+        # A user record written before tenancy existed belongs to the default tenant.
+        return {"username": username, "role": user["role"],
+                "tenant": user.get("tenant", DEFAULT_TENANT)}
 
     def __len__(self) -> int:
         return len(self._users)
 
 
-def make_token(secret: str, username: str, role: str, minutes: int = 480) -> str:
+def make_token(secret: str, username: str, role: str, minutes: int = 480, *,
+               tenant: str = DEFAULT_TENANT) -> str:
     if len(secret) < MIN_SECRET_LENGTH:
         raise ValueError(f"JWT secret must have at least {MIN_SECRET_LENGTH} characters")
     now = int(time.time())
-    claims = {"sub": username, "role": role, "iat": now, "exp": now + minutes * 60, "jti": uuid.uuid4().hex}
+    claims = {"sub": username, "role": role, "tenant": normalise(tenant),
+              "iat": now, "exp": now + minutes * 60, "jti": uuid.uuid4().hex}
     return jwt.encode(claims, secret, algorithm=ALGORITHM)
 
 
 def decode_token(secret: str, token: str) -> Dict[str, Any]:
     try:
-        claims = jwt.decode(token, secret, algorithms=[ALGORITHM], options={"require": ["exp", "sub", "role"]})
+        claims = jwt.decode(token, secret, algorithms=[ALGORITHM],
+                            options={"require": ["exp", "sub", "role", "tenant"]})
     except jwt.PyJWTError as exc:
         raise TokenError(str(exc)) from exc
     if claims["role"] not in {r.value for r in Role}:
         raise TokenError("unknown role")
+    try:
+        claims["tenant"] = normalise(claims["tenant"])
+    except TenantError as exc:
+        raise TokenError(str(exc)) from exc
     return claims

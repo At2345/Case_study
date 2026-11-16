@@ -24,7 +24,7 @@ export default function Login({ onLoggedIn }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
       <form onSubmit={submit} className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
-        <h1 className="text-lg font-bold flex items-center gap-2">
+        <h1 className="text-xl font-bold flex items-center gap-2">
           <Layers className="h-5 w-5 text-indigo-400" /> S&amp;OP Workbench
         </h1>
         <div>

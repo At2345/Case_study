@@ -44,7 +44,7 @@ export default function AllocationModal({ productId, onClose }) {
       <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
         <div className="flex justify-between items-start">
           <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2"><Scale className="h-5 w-5 text-indigo-400" /> Supply allocation simulator</h2>
+            <h2 className="text-lg font-bold text-white flex items-center gap-2"><Scale className="h-5 w-5 text-indigo-400" /> Supply allocation simulator</h2>
             <p className="text-xs text-slate-400 mt-1">Product {productId}: how to split constrained supply across Amazon, B2B and D2C. Read-only what-if.</p>
           </div>
           <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white"><X className="h-5 w-5" /></button>

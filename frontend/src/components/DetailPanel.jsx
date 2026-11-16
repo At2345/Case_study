@@ -180,7 +180,7 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
           <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Exception analysis</span>
           <span className="text-xs font-mono text-slate-400">Price: {fmtGbpPlain(item.sales_price)} / unit</span>
         </div>
-        <h3 className="text-base font-bold text-white mt-1">{item.product_id} <span className="text-slate-500 text-xs font-normal">item {item.item_id} | {item.channel}</span></h3>
+        <h3 className="text-lg font-bold text-white mt-1">{item.product_id} <span className="text-slate-500 text-xs font-normal">item {item.item_id} | {item.channel}</span></h3>
         <p className="text-xs text-slate-300 mt-2 bg-slate-950 p-3 rounded-lg border border-slate-800 leading-relaxed">{item.narrative}</p>
         <button type="button" data-testid="explain-ai-btn" onClick={askExplanation} disabled={explaining}
           className="mt-2 text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-50 flex items-center gap-1.5">
@@ -340,7 +340,7 @@ export default function DetailPanel({ itemId, reasonCodes, role, onChanged }) {
 
       {canWrite ? (
         <form onSubmit={submit} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3" aria-label="Planner decision">
-          <h4 className="text-xs font-bold text-white uppercase tracking-wider">Planner consensus decision (S&amp;OP audit)</h4>
+          <h4 className="text-sm font-bold text-white uppercase tracking-wider">Planner consensus decision (S&amp;OP audit)</h4>
           <div>
             <label htmlFor="qty" className="text-[11px] text-slate-400 block mb-1">Final quantity (units)</label>
             <input id="qty" type="number" min="0" value={qty} onChange={(e) => setQty(e.target.value)}

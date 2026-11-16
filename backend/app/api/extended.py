@@ -13,10 +13,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.service import clean
+from app.api.tasks import _META, task_for_question
 from app.config import settings
 from app.evaluation.disaggregate import METHODS, disaggregate
 from app.evaluation.fva import negative_fva_streaks, override_fva
 from app.forecasting import dynamic as dynamic_forecast
+from app.mcp.intent import mcp_evidence
 from app.models.enums import ReasonCode, Role
 from app.narrative.concepts import concept_answer
 from app.narrative.guardrails import NUMBER as _NUMBER_RE
@@ -81,9 +83,15 @@ class RerunNodeRequest(BaseModel):
     node: str = Field(..., min_length=1, max_length=64)
 
 
-def _unverifiable_numbers(text: str, ctx: Dict[str, Any]) -> List[str]:
-    """Numbers in the assistant text that do not appear anywhere in the cycle context."""
+def _unverifiable_numbers(text: str, ctx: Dict[str, Any], extra: str = "") -> List[str]:
+    """Numbers in the assistant text that do not appear anywhere in the cycle context.
+
+    `extra` (e.g. MCP evidence) contributes additional allowed numbers so the assistant
+    can quote external-system figures that are backed by tool evidence.
+    """
     allowed = _allowed_numbers(_round(ctx), set())
+    if extra:
+        allowed |= _allowed_numbers(extra, set())
     out = []
     for token in _NUMBER_RE.findall(text or ""):
         value = float(token.replace(",", ""))
@@ -191,6 +199,14 @@ def deterministic_answer(question: str, ctx: Dict[str, Any]) -> str:
             return "No monthly demand rows are available to rank best-selling products in the current context."
         return "Best-selling items by planned demand: " + " ".join(
             f"Item {r['item_id']} ({r['channel']}): {_fmt_num(r['demand'])} units." for r in rows[:5])
+    if branch == "task":
+        tid = _structured_intent(question)[1]
+        m = next((t for t in _META if t["id"] == tid), None)
+        if m:
+            return (f"{m['title']}: {m['description']} "
+                    f"(rhythm {m['rhythm']}, channel {m['channel']}, priority {m['priority']}). "
+                    f"Run it from the Co-Pilot task hub for the current cycle numbers.")
+        return "The project data does not contain this answer, and the knowledge-base fallback is unavailable."
     lead = "Current cycle " + str(cycle.get("cutoff")) + " has " + _fmt_num(cycle.get("pending_decisions")) + " pending decisions and planned value " + _fmt_gbp(cycle.get("planned_value_gbp")) + "."
     top = ""
     if queue:
@@ -235,7 +251,46 @@ def suggested_actions(question: str, ctx: Dict[str, Any]) -> List[Dict[str, Any]
         actions.append({"type": "review_exception", "item_id": int(top["item_id"]),
                         "title": f"View item {top['item_id']} details",
                         "detail": f"{_fmt_gbp(top.get('value_delta_gbp'))} value delta, {top.get('risk_type')} risk."})
+    if any(word in q for word in ("task", "urgent", "todo", "daily", "soe", "what should i do", "priority", "ping")):
+        for t in (ctx.get("tasks") or [])[:3]:
+            actions.append({"type": "run_task", "task_id": t["id"],
+                            "title": f"Run: {t['title']}",
+                            "detail": f"{t.get('attention', 0)} items need attention."})
+    if any(word in q for word in ("explain", "what is", "what's", "how does", "tell me about", "describe")):
+        task = task_for_question(question)
+        if task:
+            actions.append({"type": "run_task", "task_id": task["id"],
+                            "title": f"Run: {task['title']}",
+                            "detail": task["description"]})
     return actions
+
+
+def suggested_questions(question: str, ctx: Dict[str, Any]) -> List[str]:
+    """Deterministic follow-up questions for the last assistant answer."""
+    intent = _structured_intent(question)
+    if intent and intent[0] == "task":
+        task = task_for_question(question)
+        if task:
+            return [f"Run {task['title']} for the current cycle",
+                    f"Which items does {task['title']} flag right now?",
+                    "What is the value at risk this cycle?"]
+    name = intent[0] if intent else None
+    pool = {
+        "otif": ["Which items drive the OTIF exposure?", "What is the OTIF penalty this cycle?", "How does phasing affect OTIF?"],
+        "exception": ["Which exceptions carry the most value at risk?", "How many exceptions still need a decision?", "What is the largest exception?"],
+        "quality": ["What are the data-quality warnings?", "Which channels have quality issues?"],
+        "safety": ["What is the safety-stock position?", "Which A items have the biggest holding-cost saving?"],
+        "fva": ["What is the FVA position?", "Which overrides added value?"],
+        "cycle": ["What is the cycle status?", "How many decisions are pending?"],
+        "phasing": ["How do B2B demand and deliveries differ next month?", "What is the delivery lag profile?"],
+        "top_products": ["Which products sell best on Amazon?", "What are the top items by demand?"],
+        "amazon": ["Which items are surging on Amazon?", "What is the Amazon pipeline status?"],
+    }
+    if name in pool:
+        return pool[name]
+    return ["Which three exceptions carry the most value at risk, and why?",
+            "How big is the OTIF exposure and which items drive it?",
+            "Summarise the data-quality issues in this cycle."]
 
 
 def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
@@ -245,6 +300,7 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
     write_roles = (Role.PLANNER.value, Role.ADMIN.value)
     runs, chats, llm = ctx.get("runs"), ctx.get("chats"), ctx.get("llm")
     store_dir, reload_fn = ctx["store_dir"], ctx.get("reload_fn")
+    mcp_store = ctx.get("mcp_store")
 
     # ------------------------------------------------------------------ OTIF (F-B2B-03)
     def otif_rows() -> Dict[str, Any]:
@@ -462,6 +518,7 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
 
     # ------------------------------------------------------------------ conversational assistant
     def context() -> Dict[str, Any]:
+        from app.api.tasks import urgent_tasks
         svc, dec = state["svc"], decisions()
         s = svc.summary(dec, committed=ledger.commit_for(svc.cutoff) is not None, fva=None)
         ph = svc.phasing_summary(dec)["rows"]
@@ -499,6 +556,11 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
                               "amazon": svc.top_items_by_demand("amazon", svc.first_month, 5),
                               "b2b": svc.top_items_by_demand("b2b", svc.first_month, 5),
                               "d2c": svc.top_items_by_demand("d2c", svc.first_month, 5)},
+            "tasks": [{"id": t["id"], "title": t["title"], "attention": t["attention"]}
+                      for t in urgent_tasks(svc, dec, store_dir, 5)],
+            "task_catalog": [{"id": t["id"], "title": t["title"], "description": t["description"],
+                               "rhythm": t["rhythm"], "channel": t["channel"], "priority": t["priority"]}
+                              for t in _META],
         }
 
     def _chat_store() -> Any:
@@ -516,6 +578,12 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         from app.narrative.llm import PROVIDER_STATUS
         return {"providers": PROVIDER_STATUS}
 
+    @app.get("/api/v1/ai/privacy")
+    def ai_privacy(user=Depends(require(*all_roles))):
+        """What is redacted before a prompt leaves the process, and which providers may be called."""
+        from app.ai.privacy import report
+        return report()
+
     @app.delete("/api/v1/assistant/history")
     def assistant_clear(user=Depends(require(*all_roles))):
         _chat_store().clear(user["username"])
@@ -529,64 +597,81 @@ def register(app: FastAPI, ctx: Dict[str, Any]) -> None:
         retrieval = retrieve(payload.question, state["svc"], ledger, settings.hybrid_search)
         store.add(user["username"], "user", payload.question)
         actions = suggested_actions(payload.question, c)
+        mcp = mcp_evidence(payload.question, mcp_store)
 
         async def events():
             parts: List[str] = []
             deterministic = False
             try:
                 yield f"data: {json.dumps({'tier': retrieval.tier})}\n\n"
-                if retrieval.sources:
-                    yield f"data: {json.dumps({'sources': [{'kind': s.kind, 'title': s.title, 'snippet': s.snippet[:160]} for s in retrieval.sources]})}\n\n"
-                try:
-                    if retrieval.tier == "general_knowledge":
-                        concept = concept_answer(payload.question)
-                        if llm is not None and hasattr(llm, "stream"):
-                            prompt = payload.question
-                            if concept:
-                                prompt = f"REFERENCE MATERIAL (ground your answer in it):\n{concept}\n\nQUESTION: {payload.question}"
-                            async for chunk in llm.stream(GENERAL_KNOWLEDGE_PROMPT, history, prompt):
-                                parts.append(chunk)
-                                yield f"data: {json.dumps({'delta': chunk})}\n\n"
-                        else:
-                            answer = concept or "The project data does not contain this answer, and no knowledge-base fallback is configured."
-                            deterministic = True
-                            parts.append(answer)
-                            yield f"data: {json.dumps({'delta': answer})}\n\n"
-                    else:
-                        evidence = "\n".join(f"[{s.kind}] {s.title}: {s.snippet}" for s in retrieval.sources if s.kind in ("docs", "ledger"))
-                        prompt = f"CONTEXT JSON:\n{json.dumps(_round(c), default=str)}\n\n"
-                        if evidence:
-                            prompt += f"PROJECT EVIDENCE:\n{evidence}\n\n"
-                        prompt += f"QUESTION: {payload.question}"
-                        if llm is not None and hasattr(llm, "stream"):
-                            async for chunk in llm.stream(ASSISTANT_PROMPT, history, prompt):
-                                parts.append(chunk)
-                                yield f"data: {json.dumps({'delta': chunk})}\n\n"
-                        else:
-                            answer = _deterministic_or_honest(payload.question, c)
-                            deterministic = True
-                            parts.append(answer)
-                            yield f"data: {json.dumps({'delta': answer})}\n\n"
-                except Exception as exc:
-                    log.warning("assistant llm failed (%s), using deterministic fallback", type(exc).__name__)
-                    if retrieval.tier == "general_knowledge":
-                        answer = concept_answer(payload.question) or "The knowledge-base fallback is temporarily unavailable, and the project data does not contain this answer."
-                    else:
-                        answer = _deterministic_or_honest(payload.question, c)
+                sources = [{'kind': s.kind, 'title': s.title, 'snippet': s.snippet[:160]} for s in retrieval.sources]
+                if mcp and mcp.get("source"):
+                    sources.append(mcp["source"])
+                if sources:
+                    yield f"data: {json.dumps({'sources': sources})}\n\n"
+                if mcp and mcp.get("failed"):
+                    # The external system is unreachable: answer deterministically, never fabricate figures.
+                    failed = mcp["failed"]
+                    answer = (f"The {failed['kind'].upper()} connection ({failed['server_id']}) is unavailable, "
+                              f"so I could not pull data from the external system. Check the MCP connection status and try again.")
                     deterministic = True
                     parts.append(answer)
                     yield f"data: {json.dumps({'delta': answer})}\n\n"
+                else:
+                    try:
+                        if retrieval.tier == "general_knowledge":
+                            concept = concept_answer(payload.question)
+                            if llm is not None and hasattr(llm, "stream"):
+                                prompt = payload.question
+                                if concept:
+                                    prompt = f"REFERENCE MATERIAL (ground your answer in it):\n{concept}\n\nQUESTION: {payload.question}"
+                                async for chunk in llm.stream(GENERAL_KNOWLEDGE_PROMPT, history, prompt):
+                                    parts.append(chunk)
+                                    yield f"data: {json.dumps({'delta': chunk})}\n\n"
+                            else:
+                                answer = concept or "The project data does not contain this answer, and no knowledge-base fallback is configured."
+                                deterministic = True
+                                parts.append(answer)
+                                yield f"data: {json.dumps({'delta': answer})}\n\n"
+                        else:
+                            evidence = "\n".join(f"[{s.kind}] {s.title}: {s.snippet}" for s in retrieval.sources if s.kind in ("docs", "ledger", "task"))
+                            prompt = f"CONTEXT JSON:\n{json.dumps(_round(c), default=str)}\n\n"
+                            if evidence:
+                                prompt += f"PROJECT EVIDENCE:\n{evidence}\n\n"
+                            if mcp and mcp.get("evidence"):
+                                prompt += f"MCP EVIDENCE (from the external system, quote numbers as they appear):\n{mcp['evidence']}\n\n"
+                            prompt += f"QUESTION: {payload.question}"
+                            if llm is not None and hasattr(llm, "stream"):
+                                async for chunk in llm.stream(ASSISTANT_PROMPT, history, prompt):
+                                    parts.append(chunk)
+                                    yield f"data: {json.dumps({'delta': chunk})}\n\n"
+                            else:
+                                answer = _deterministic_or_honest(payload.question, c)
+                                deterministic = True
+                                parts.append(answer)
+                                yield f"data: {json.dumps({'delta': answer})}\n\n"
+                    except Exception as exc:
+                        log.warning("assistant llm failed (%s), using deterministic fallback", type(exc).__name__)
+                        if retrieval.tier == "general_knowledge":
+                            answer = concept_answer(payload.question) or "The knowledge-base fallback is temporarily unavailable, and the project data does not contain this answer."
+                        else:
+                            answer = _deterministic_or_honest(payload.question, c)
+                        deterministic = True
+                        parts.append(answer)
+                        yield f"data: {json.dumps({'delta': answer})}\n\n"
                 if actions:
                     yield f"data: {json.dumps({'actions': actions})}\n\n"
                 text = "".join(parts)
                 # Deterministic answers are by construction from cycle data, so the number check is skipped;
-                # general-knowledge answers are exempt from the cycle-data check.
-                bad = [] if deterministic or retrieval.tier != "project" else _unverifiable_numbers(text, c)
+                # general-knowledge answers are exempt from the cycle-data check. MCP evidence adds allowed numbers.
+                bad = [] if deterministic or retrieval.tier != "project" else _unverifiable_numbers(
+                    text, c, extra=(mcp or {}).get("evidence", ""))
                 if bad:
                     note = f" Note: {', '.join(bad[:3])} could not be verified against the cycle data."
                     text += note
                     yield f"data: {json.dumps({'delta': note})}\n\n"
                 store.add(user["username"], "assistant", text)
+                yield f"data: {json.dumps({'suggestions': suggested_questions(payload.question, c)})}\n\n"
                 yield f"data: {json.dumps({'done': True})}\n\n"
             except Exception as exc:
                 log.warning("assistant failed: %s", type(exc).__name__)

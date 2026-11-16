@@ -209,11 +209,202 @@ Each phase ends with the backend test suite green and the frontend production bu
 
 ---
 
+## 7. Co-Pilot daily-task hub + S&OE/S&OP automation suite (planned Oct 2026)
+
+**Goal.** Turn the Co-Pilot page into Danny's daily task hub: filters and fast tasks under the "S&OP co-pilot" section that run the automated workflows below and land the results (queue, alerts, exports) where Danny already works. The automations target the 60-70% of planner hours lost to data hunting, reconciliations and spreadsheet prep.
+
+**Design principles.**
+- Every automation is a small, deterministic service behind a REST endpoint + a scheduled job; the Co-Pilot page is the launcher and results viewer, not a separate app.
+- External systems (Amazon EDI/Vendor Central, Slack/Teams, SAP ERP, supplier EDI 830) do not exist in this environment: build **adapters with simulated feeds and export templates**, with a documented seam where real credentials/webhooks plug in.
+- Alerts reuse the existing notification store (`app/store/ops.py`, `GET /api/v1/notifications`); schedules reuse the existing scheduler (`app/orchestration/scheduler.py`, daily/monthly, UK time — currently only `monthly_cycle`).
+- Each phase ends with backend tests green and the frontend production build passing.
+
+### 7.1 Phase 0 — Co-Pilot task hub UX (the integration layer) — IMPLEMENTED (Oct 2026)
+- **Filters** in the left rail of `CopilotPage.jsx`: rhythm (S&OE daily / S&OP weeks 1-2 / week 3 / week 4), channel (Amazon/B2B/D2C), priority (high/medium/low). **Every filter has its own set of fast tasks** — the grid under "S&OP co-pilot" re-renders to the tasks Danny needs to analyse and prove for that rhythm/channel/priority.
+- **Fast tasks** under the "S&OP co-pilot" heading: a grid of one-click buttons (one per automation below) that call the new endpoints and open the result — a filtered workbench queue (reusing `action.filters` navigation in `App.jsx`), a chat answer, or a download.
+- **Task registry endpoint** `GET /api/v1/tasks` (name, rhythm, channel, priority, status, live attention count, urgent flag) so the rail is data-driven; `POST /api/v1/tasks/{id}/run` executes one task and returns a plain-language summary + navigation actions.
+- **Implemented:** `backend/app/api/tasks.py` (12 tasks: Amazon PO confirmations, OTIF exposure, Buy Box watch, exception queue, data-quality gate, promo sanity, safety stock, value at risk, scenario what-if, consensus commit, executive briefing, FVA & autopilot), registered in `main.py`; `CopilotPage.jsx` filter selects + fast-task grid + run-to-chat; `tests/test_tasks.py` (8 tests, green).
+- **Performance fix (Oct 2026):** `load()` in `app/data/loaders.py` re-read parquet from disk on every call — the task hub loaded ~100 MB per request (first `/tasks` call took 303 s). Added an `lru_cache` on full-table reads (`clear_cache()` on `/admin/reload`), a 60 s TTL on the attention computation, and a background warm-up at startup. `/api/v1/tasks` now responds in ~50-110 ms.
+- **Task-run performance fix (Oct 2026):** `run()` computed `otif.from_plan()` (~13-20 s) and the exception queue for **every** task before branching by task id, so even `consensus_commit` took 55 s. Made the heavy steps lazy (OTIF only for `otif_exposure`, queue only for `exception_queue`/`value_at_risk`), stopped the urgent-notification branch from re-running the full attention computation, and raised the attention TTL to 300 s. Also filtered the big tables to the rows each analysis needs: `amazon_traffic` (11.9 M rows) to the last 10 days, `amazon_inventory` (8.5 M rows) to the last 7 days, and the `orderbook` (2.7 M rows) to the at-risk item ids in `otif._by_customer`. Measured live: every task run now returns in ≤1.4 s (was 14-79 s); cold attention dropped from 46 s to ~3.6 s.
+
+### 7.2 Phase 1 — Daily & weekly S&OE automations (Amazon execution) — chatbot reachability + urgency pings IMPLEMENTED
+All three are feasible from existing tables — no new data needed for v1.
+
+**Chatbot reachability (implemented).** Every task detail is reachable over the chatbot: the assistant context (`extended.py` `context()`) now includes the urgent-task list, `suggested_actions()` emits `run_task` chips for "what should I do / urgent / daily" questions, and running a task appends its full summary + actions as an assistant chat message. **Urgency pings (implemented):** running a task with urgent findings emits an in-app notification (`kind: "task"`, planner+admin) via the existing `NotificationStore` + bell; the task card shows a pulsing "N urgent" badge.
+- **Task-explanation fix (Oct 2026):** "explain <task>" questions (e.g. "Can you explain Promo sanity check?") previously fell through to lexical doc search, so the LLM answered "the context does not contain an explanation" and cited `DEVELOPMENT_PLAN.md`/`ENHANCEMENT_PLAN.md`/`memory/PRD.md`. The retrieval router now maps explanation questions to the task registry (`task_for_question` in `tasks.py`), the assistant context carries a full `task_catalog` (id/title/description/rhythm/channel/priority), the deterministic fallback has a `task` branch, and `suggested_actions()` adds a "Run: <task>" chip. Verified live: the assistant answers from the registry description with no doc-file references.
+- **Suggested follow-ups (Oct 2026):** every assistant response now ends with 2-3 clickable follow-up question chips. The backend emits a `suggestions` SSE event (`suggested_questions()` in `extended.py`) derived deterministically from the question's intent/task (task-specific for "explain <task>", per-intent pools for OTIF/exceptions/quality/safety/FVA/cycle/phasing/top-products/Amazon, generic pool otherwise); task-run messages get client-side suggestions. `api.js` exposes an `onSuggestions` callback; `CopilotPage.jsx` renders the chips under each assistant message and clicking one asks it directly.
+
+**A. Amazon PO ingestion & 24-hour confirmation reconciler**
+- Bottleneck: missed 24h EDI 850 acceptance window or over-confirmation → 3-9% COGS chargebacks.
+- What exists: `orderbook` (ordered/delivered/cancelled, decision_at), `amazon_inventory` (sellable_on_hand_inventory_units, open_purchase_order_units, vendor_confirmation_rate), `amazon_sell_out`.
+- Build: `app/soe/po_reconciler.py` — ATP = sellable on-hand + open PO − committed; confirm lines with coverage ≥100%, flag deficits with recommended partial confirmation before `decision_at + 24h`; daily schedule `amazon_po_reconcile` (daily 07:00 UK); results as `agent_work`-style notifications + a `GET /api/v1/soe/po-confirmations` queue panel.
+- Acceptance: every open order line gets a status (confirm / partial / deficit); deficit lines carry a recommended qty; chargeback exposure £ summed.
+
+**B. Amazon shortage deduction & chargeback dispute bot**
+- Bottleneck: unmonitored co-op/shortage/receiving deductions erode margin (up to 74% of 1P vendors).
+- What exists: `orderbook` delivered vs ordered + cancellation fields; `amazon_inventory.vendor_confirmation_rate`.
+- Build: `app/soe/disputes.py` — weekly reconciliation of delivered qty vs confirmed qty per order; where the gap is Amazon-side (delivered < confirmed but no internal cancellation), auto-assemble a dispute packet (order id, ASN/PO refs, evidence rows) and stage it for Vendor Central submission; `GET /api/v1/soe/disputes` + "submit" stub adapter; weekly schedule `amazon_dispute_review` (Monday 08:00 UK).
+- Acceptance: disputes list with £ at risk, evidence bundle download, submission log.
+
+**C. Daily detail page & Buy Box monitoring alert**
+- Bottleneck: Buy Box loss / glance-view collapse discovered weeks late.
+- What exists: `amazon_traffic` (glance_views), `amazon_inventory` (out-of-stock rate), `amazon_sell_out` (ordered_units), `past_covariates` (amazon_avg_daily_glance_views, zero-traffic rate).
+- Build: `app/soe/buybox.py` — per-ASIN daily poller (adapter over `amazon_traffic`), alert when an A-item loses Buy Box proxy (vendor_confirmation_rate → 0 or OOS) or glance views drop >25% for 3 consecutive days; Slack/Teams adapter stub + in-app notification; daily schedule `buybox_monitor` (09:00 UK).
+- Acceptance: alert fires on the 3-day rule; notification links to the item; suppression list viewable.
+
+### 7.3 Phase 2 — Pre-S&OP commercial automations (weeks 1-2)
+**A. Commercial input & promotional sanity checker**
+- Bottleneck: late/fragmented KAM promo submissions with unrealistic uplifts.
+- What exists: `promotions` (date_from/to, discount, forecast_units, type), `items` (launch/eol, abc), orderbook lead times (`inventory/safety_stock.lead_times`).
+- Build: promo intake endpoint `POST /api/v1/promos/validate` + portal form; validation rules: lead time vs required factory date, uplift vs historical campaign lift per customer (flag >300%), packaging/barcode readiness (launch/eol + item master checks); results feed the S&OP baseline.
+- Acceptance: each rule returns pass/warn/fail with the evidence; a "needs justification" queue for KAM follow-up.
+
+**B. Retail POS (EDI 852) data cleansing & outlier scrubbing**
+- Bottleneck: delivery spikes, bulk transfers, phantom zero-sales distort baselines.
+- What exists: `target_time_series` (`imputed`, `exposure`), `triage/quality.py` masking (`mask_incomplete`, `mask_level_series`), `forecasting/quantiles` residual ratios.
+- Build: `app/soe/pos_cleanse.py` — month-end pipeline that flags anomalies (single-day returns, test orders, OOS censorship via zero-traffic days), scrubs the series, writes an audit-ready parquet + audit log (what changed, why); `GET /api/v1/soe/pos-cleanse` report.
+- Acceptance: anomaly counts by type, before/after series diff, audit log rows; baseline metrics recompute cleanly.
+
+### 7.4 Phase 3 — Financialization & scenario planning (week 3)
+**A. Automated volume-to-value financial translation**
+- Bottleneck: Danny spends a day converting units to £ for exec/finance.
+- What exists: `items.sales_price`, `items.purchase_price`, consensus plan, `allocation/optimiser` margin/penalty config, AOP gap concept in briefing.
+- Build: `app/finance/financialize.py` — join consensus units × price/cost/margin/co-op discount → gross revenue, gross margin, working-capital (safety stock £ via `inventory/safety_stock`), gap vs AOP; `GET /api/v1/finance/plan` + a Financial view on the Co-Pilot task hub; CSV/PDF export.
+- Acceptance: revenue/margin reconcile to units × price within rounding; AOP gap per channel/month.
+
+**B. One-click scenario simulation engine**
+- Bottleneck: exec "what-if" questions take days of Excel rebuilding.
+- What exists: scenario store + `POST /api/v1/scenarios`, `generate`, `compare`, `promote` (`ops_routes.py`), `engine.apply_edits`.
+- Build: extend the scenario engine with **parameter sliders** (promo date shift, component constraint %, price change) that map to edit templates; instant re-run of financialization + OTIF + safety-stock impact; `GET /api/v1/scenarios/simulate?delta=...` returning downstream deltas; UI sliders on `ScenariosPage`/Co-Pilot fast task.
+- Acceptance: a promo-shift slider changes revenue, fill rate and SS in one response; results are explainable (which items moved, why).
+
+### 7.5 Phase 4 — Supply-chain hand-off & executive reporting (week 4)
+**A. Automated ERP/MRP parameter & forecast push**
+- Bottleneck: hours reformatting CSVs to upload forecasts; stale safety stock in ERP.
+- What exists: consensus export (`export/consensus` CSV), safety stock + P10-P90 bands, scheduler.
+- Build: `app/handoff/erp_push.py` — approved consensus triggers a webhook adapter (stub endpoint + signed payload) pushing the reconciled plan; concurrently recompute SS/reorder points from the P90−P10 spread and emit an ERP parameter file; `GET /api/v1/handoff/erp` status + retry.
+- Acceptance: payload schema documented; push logged with status; SS params match `inventory/safety-stock` output.
+
+**B. Automated supplier forecast sharing (BOM explosion + EDI 830)**
+- Bottleneck: manual component requirement calcs and emailed spreadsheets.
+- What exists: consensus plan, `baseline_mapping` (product→item), no BOM table yet.
+- Build: add a minimal `bom` contract (finished-good → component, qty per unit) + `app/handoff/edi830.py` — explode consensus into component requirements, emit rolling 12-month EDI 830-style CSV per supplier; `GET /api/v1/handoff/edi830` download.
+- Acceptance: component totals = finished-goods × BOM ratio; 830 file validates against the template.
+
+**C. Automated executive S&OP deck generation**
+- Bottleneck: 1-2 days of slide/waterfall/commentary drafting.
+- What exists: `export/briefing.pdf` (executive brief), Gemini/GLM via `narrative/client.py` + `FailoverClient`, waterfall data in consensus vs baseline vs commercial.
+- Build: extend the briefing generator into a **deck mode**: month-over-month waterfall (AOP vs statistical baseline vs commercial vs consensus), top-5 exception risks (Amazon chargeback exposure, OTIF), LLM-generated bullet commentary with guardrails (`narrative/guardrails.py`); `GET /api/v1/export/deck.pdf`; deterministic fallback when the LLM is down.
+- Acceptance: deck renders without the LLM; with the LLM, commentary cites only numbers present in the data (guardrail-validated).
+
+### 7.6 Cross-cutting
+- **Scheduler defaults** (`scheduler.py` `DEFAULTS`): add `amazon_po_reconcile` (daily 07:00), `amazon_dispute_review` (weekly Mon 08:00), `buybox_monitor` (daily 09:00), `pos_cleanse` (monthly day 1), `erp_push` (monthly day 3 after commit). All admin-tunable via the existing `PUT /api/v1/admin/schedules/{job}`.
+- **Notifications**: every automation emits `agent_work`-style notifications with a link (existing `NotificationStore` + bell).
+- **Adapters**: `app/integrations/` with `AmazonEdiAdapter`, `VendorCentralAdapter`, `MessagingAdapter`, `ErpAdapter` — simulated in this environment, each with a documented credential/webhook seam and a deterministic test double.
+- **Tests**: one test module per phase (`tests/test_soe_automations.py`, `tests/test_finance.py`, `tests/test_handoff.py`) + Co-Pilot task-hub component tests; keep the existing suite green.
+- **Sequencing**: Phase 0 first (UX shell + task registry), then 1 → 2 → 3 → 4; each phase is independently shippable and demoable.
+
+---
+
+## 8. MCP Configuration for Third-Party Applications (ERP, CRM, Jira) (planned Oct 2026)
+
+**Goal.** Let the user configure Model Context Protocol (MCP) servers for third-party applications — ERP (e.g. SAP S/4HANA, Dynamics 365 F&O), CRM (e.g. Salesforce), Jira — directly from the Co-Pilot page, and let the Co-Pilot assistant call the tools those servers expose when a question needs external-system data. The app is an **MCP client**: the org runs MCP servers next to each third-party system; we store the connection config, discover tools, and invoke them with audit and guardrails.
+
+**Design principles.**
+- Same pattern as section 7: a small deterministic service behind REST endpoints + a config store; the Co-Pilot page is the configuration surface and the assistant is the consumer.
+- No real ERP/CRM/Jira exists in this environment: ship **reference MCP servers with simulated feeds** (`backend/app/mcp/demo/`) plus documented credential seams, consistent with the section 7 adapter principle.
+- MCP transport: **streamable HTTP / SSE** for remote servers (the standard for SaaS MCP servers); stdio support later for local servers. Use the official `mcp` Python SDK client; a minimal JSON-RPC fallback keeps the assistant working if the SDK is unavailable.
+- Every tool call is **audited** (who, which server, which tool, args, latency, ok/error) and **time-bounded** (default 10 s) so a hanging external system never blocks the assistant stream.
+- Secrets never leave the backend: API keys/tokens are stored server-side (env or `store_dir` with restricted perms) and returned masked (`sk-****last4`) by the API.
+
+### 8.1 Data model — MCP server config
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | str | slug, e.g. `erp_sap` |
+| `name` | str | display name, e.g. "SAP ERP" |
+| `kind` | enum `erp \| crm \| jira \| generic` | drives the template + default tool allowlist |
+| `transport` | enum `http_sse \| streamable_http` | default `streamable_http` |
+| `url` | str | MCP server endpoint |
+| `headers` | dict (masked) | auth headers; `Authorization`/`X-API-Key` stored server-side |
+| `enabled` | bool | disabled servers are never called |
+| `tools` | list[str] | allowlist of tool names; empty = all discovered tools |
+| `timeout_s` | int | default 10 |
+| `created_by` / `updated_at` | str | audit fields |
+
+Persisted in a new `McpStore` following the existing store pattern (`app/store/ops.py` Mongo collection `mcp_servers`, or `JsonMcpStore` at `store_dir / "mcp_servers.json"` for the local build).
+
+### 8.2 Backend module `backend/app/mcp/`
+
+- **`client.py`** — thin MCP client wrapper: `connect(config)` (lazy, per-call), `list_tools()`, `call_tool(name, args)` with timeout, result-size cap (e.g. 256 KB), and error mapping (`timeout | auth | not_found | server_error`). Uses the `mcp` SDK when installed; otherwise a minimal JSON-RPC `POST` over the configured transport.
+- **`registry.py`** — CRUD over `McpStore` with secret masking, kind templates, and the tool allowlist filter.
+- **`templates.py`** — per-kind reference tool schemas so the UI can show what a server should expose:
+  - **ERP (SAP/D365):** `get_open_purchase_orders`, `get_stock_levels`, `get_material_master`, `get_supplier_lead_times`, `push_forecast` (write, admin-gated).
+  - **CRM (Salesforce):** `get_account`, `get_opportunities`, `get_cases`, `get_forecast_commit`.
+  - **Jira:** `search_issues`, `get_issue`, `create_issue` (write, admin-gated).
+- **`demo/`** — reference MCP servers (`erp_server.py`, `crm_server.py`, `jira_server.py`) implementing the MCP protocol over the same transport with simulated data derived from the existing tables (order book → open POs, items → material master, OTIF rows → Jira issues), so the feature is demoable end-to-end without external systems.
+- **`audit.py`** — one `mcp_call` log row per invocation (server, tool, args summary, ok/error, latency, user) in the run store / ledger-adjacent store.
+
+### 8.3 API `backend/app/api/mcp.py` (registered in `main.py` like `tasks.py`)
+
+| Endpoint | Roles | Purpose |
+|---|---|---|
+| `GET /api/v1/mcp/servers` | all | list servers; secrets masked; `status` (last test result) |
+| `POST /api/v1/mcp/servers` | admin | create (validates URL + kind) |
+| `PUT /api/v1/mcp/servers/{id}` | admin | update (headers re-sent fields only) |
+| `DELETE /api/v1/mcp/servers/{id}` | admin | delete |
+| `POST /api/v1/mcp/servers/{id}/test` | admin | connect + `list_tools()`; stores `status` + discovered tools |
+| `GET /api/v1/mcp/servers/{id}/tools` | all | discovered tools (from last test) |
+| `POST /api/v1/mcp/servers/{id}/call` | planner/admin | call one allowlisted tool; audited; disabled server → 409 |
+
+### 8.4 Assistant integration (`assistant_stream` in `backend/app/api/extended.py`)
+
+- New `_mcp_intent(question)` step alongside `_structured_intent`: matches external-system words ("erp", "sap", "crm", "salesforce", "jira", "open po", "stock level", "ticket", "account", "opportunity") to the configured server of that kind.
+- When an intent matches an **enabled** server: call the mapped tool(s) (e.g. `get_open_purchase_orders` for "open POs in SAP"), append the JSON result to the prompt as `MCP EVIDENCE (<server>): ...`, and emit a `sources` SSE event entry `{title: "mcp:<server>", snippet: tool + args}` so the UI shows an `mcp` source chip (reuse the existing tier/sources rendering in `CopilotPage.jsx`).
+- Guardrails: only allowlisted tools; tool results are treated like Tier-1 evidence (numbers must appear in the evidence before the answer can quote them — reuse `_unverifiable_numbers`); MCP failure → deterministic fallback answer ("the ERP connection is unavailable"), never a 500 or a fabricated figure.
+- The existing `context()` snapshot and task hub are untouched; MCP is additive.
+
+### 8.5 Co-Pilot UI (`frontend/src/pages/CopilotPage.jsx` + `frontend/src/services/api.js`)
+
+- **Connections panel**: a "Connections (MCP)" collapsible section in the left rail (between Fast tasks and suggestions) listing configured servers with kind badge (ERP/CRM/Jira), enabled toggle, and last-test status (connected / failed / never tested).
+- **Add/Edit modal**: name, kind (selecting a kind pre-fills the template tool list and a sample URL), transport, URL, auth headers (token input, stored server-side), tool allowlist checkboxes (from the last test), timeout. "Test connection" button calls `POST .../test` and shows the discovered tools inline.
+- **Source chips**: assistant answers that used an MCP tool render an `mcp:<server>` chip (same style as the existing `copilot-source-*` chips); clicking it shows the tool call details.
+- **`api.js`**: add `mcpServers()`, `createMcpServer(body)`, `updateMcpServer(id, body)`, `deleteMcpServer(id)`, `testMcpServer(id)`, `mcpTools(id)`, `callMcpTool(id, name, args)`.
+
+### 8.6 Security and ops
+
+- RBAC: admin manages servers; planner/admin can call tools; auditor can read configs and the `mcp_call` audit log.
+- Secrets: never returned by `GET` (masked); stored in env/`store_dir`; no secrets in the frontend bundle.
+- Timeouts + result caps on every call; a slow/hung server cannot stall the assistant stream (call happens before streaming or in a bounded task).
+- Write tools (`push_forecast`, `create_issue`) are admin-gated and always audited; the default allowlist for planner use is read-only.
+
+### 8.7 Tests
+
+- Unit: registry CRUD + secret masking; allowlist filtering; timeout → `timeout` error; template tool lists per kind.
+- API: admin-only create/update/delete (403 for planner); test-connection returns tools; call on a disabled server → 409; every call writes an `mcp_call` audit row.
+- Assistant: "open POs in SAP" triggers the ERP tool and the answer carries an `mcp:erp` source; MCP server down → deterministic fallback, no 500; numbers in the answer are verifiable against the tool evidence.
+- Frontend: connections panel renders servers + status; test button shows discovered tools; assistant message shows the `mcp` source chip.
+- Demo: `demo/` servers answer `list_tools` and `call_tool` for the seeded data; full backend suite + frontend production build stay green.
+
+### 8.8 Sequencing
+
+- **Phase A — Registry + API + store**: `McpStore`, `registry.py`, `mcp.py` endpoints, RBAC, secret masking. No assistant changes.
+- **Phase B — Demo servers + test connection**: `demo/` ERP/CRM/Jira MCP servers, `test` endpoint, tools listing.
+- **Phase C — Assistant integration**: `_mcp_intent`, tool invocation in `assistant_stream`, `mcp` source events, deterministic fallback.
+- **Phase D — Co-Pilot UI**: connections panel, add/edit modal, test button, source chips, `api.js` methods.
+- **Phase E — Hardening**: audit log UI, write-tool gating, timeout/result-cap tuning, real-credential seams documented.
+
+Each phase ends with the backend test suite green and the frontend production build passing.
+
+---
+
 ## Sequencing
 
 1. **Agentic forecasting** (largest, self-contained) — backend agent + endpoint, then UI.
 2. ~~Urgent co-pilot~~ — implemented then fully reverted at the user's request (Oct 2026); do not reintroduce.
 3. **Supply & Risk / Operations completion** — incremental panels and the scenario-promotion ledger action.
 4. **Hybrid search fallback** — Phase A (project-data retrieval + answerability gate), then Phase B (Gemini knowledge-base fallback behind the `HYBRID_SEARCH` flag).
+5. **Co-Pilot daily-task hub + S&OE/S&OP automations** (section 7) — Phase 0 task-hub UX first, then Amazon S&OE (1), pre-S&OP (2), financialization (3), hand-off & deck (4).
+6. **MCP configuration for third-party apps** (section 8) — Phase A registry/API first, then demo servers, assistant integration, Co-Pilot UI, hardening.
 
 Each step ends with the backend test suite green and the frontend production build passing.

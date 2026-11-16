@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
@@ -49,6 +50,18 @@ def validate_all(data_dir: Optional[Path] = None) -> Dict[str, List[str]]:
     return {name: validate_table(name, data_dir) for name in CONTRACTS}
 
 
+@lru_cache(maxsize=64)
+def _load_cached(name: str, columns: Optional[Tuple[str, ...]], data_dir: str) -> pd.DataFrame:
+    """Full-table read cached per (name, columns, data_dir). Tables are immutable per data generation."""
+    path = table_path(name, Path(data_dir))
+    return pq.read_table(path, columns=list(columns) if columns else None).to_pandas()
+
+
+def clear_cache() -> None:
+    """Drop cached tables (call after a data regeneration / reload)."""
+    _load_cached.cache_clear()
+
+
 def load(
     name: str,
     columns: Optional[List[str]] = None,
@@ -60,7 +73,9 @@ def load(
         issues = validate_table(name, data_dir)
         if issues:
             raise ContractViolation("; ".join(issues))
-    return pq.read_table(table_path(name, data_dir), columns=columns, filters=filters).to_pandas()
+    if filters is not None:
+        return pq.read_table(table_path(name, data_dir), columns=columns, filters=filters).to_pandas()
+    return _load_cached(name, tuple(columns) if columns else None, str(Path(data_dir or settings.data_dir)))
 
 
 def row_counts(data_dir: Optional[Path] = None) -> Dict[str, int]:

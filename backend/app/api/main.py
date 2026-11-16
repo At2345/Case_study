@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.api.auth import TokenError, UserStore, decode_token, make_token
 from app.api.service import DataService, clean
 from app.allocation.optimiser import AllocationConfig, build_demands, simulate
+from app.bi.tenancy import DEFAULT_TENANT
 from app.config import settings
 from app.evaluation.fva import override_fva
 from app.models.domain import AllocationRequest, LoginRequest, OverrideRequest
@@ -65,19 +66,23 @@ def create_app(
     app.state.narrator = narrator or Narrator(None, store_dir / "narratives.db")
     from app.orchestration.jobs import JobRunner
 
-    runs = chats = jobs = schedules = notes = scenarios = None
+    runs = chats = jobs = schedules = notes = scenarios = mcp = None
     if db is not None:
+        from app.store.mcp import McpStore
         from app.store.ops import NotificationStore, ScenarioStore, ScheduleStore
         from app.store.runs import ChatStore, RunStore
         runs, chats = RunStore(db), ChatStore(db)
         schedules, notes, scenarios = ScheduleStore(db), NotificationStore(db), ScenarioStore(db)
+        mcp = McpStore(db)
     else:
         from app.store.local import JsonChatStore, JsonNotificationStore, JsonRunStore, JsonScenarioStore, JsonScheduleStore
+        from app.store.mcp import JsonMcpStore
         runs = JsonRunStore(store_dir / "cycle_runs.json")
         chats = JsonChatStore(store_dir / "assistant_messages.json")
         schedules = JsonScheduleStore(store_dir / "schedules.json")
         notes = JsonNotificationStore(store_dir / "notifications.json")
         scenarios = JsonScenarioStore(store_dir / "scenarios.json")
+        mcp = JsonMcpStore(store_dir)
     for run_id in runs.fail_stale():
         notes.add(["admin"], "error", "Pipeline run interrupted", "The server restarted during the run; start it again from Operations.",
                   "operations", run_id)
@@ -105,14 +110,16 @@ def create_app(
     def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Dict[str, str]:
         if settings.demo_mode:
             # Demo: pretend to be a planner by default
-            return {"username": "demo", "role": Role.PLANNER.value, "jti": "demo"}
+            return {"username": "demo", "role": Role.PLANNER.value, "jti": "demo",
+                    "tenant": DEFAULT_TENANT}
         if creds is None:
             raise HTTPException(status_code=401, detail="Not authenticated", headers={"WWW-Authenticate": "Bearer"})
         try:
             claims = decode_token(secret, creds.credentials)
         except TokenError:
             raise HTTPException(status_code=401, detail="Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
-        return {"username": claims["sub"], "role": claims["role"], "jti": claims.get("jti", "")}
+        return {"username": claims["sub"], "role": claims["role"], "jti": claims.get("jti", ""),
+                "tenant": claims["tenant"]}
 
     def require(*roles: str):
         def dep(user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
@@ -150,9 +157,11 @@ def create_app(
             log.warning("failed login for %s", payload.username)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         failures.pop(payload.username, None)
-        token = make_token(secret, user["username"], user["role"], token_minutes)
+        token = make_token(secret, user["username"], user["role"], token_minutes,
+                           tenant=user["tenant"])
         return {"access_token": token, "token_type": "bearer", "role": user["role"],
-                "username": user["username"], "expires_in": token_minutes * 60}
+                "username": user["username"], "tenant": user["tenant"],
+                "expires_in": token_minutes * 60}
 
     # ------------------------------------------------------------------ read
     @app.get("/api/v1/summary")
@@ -338,6 +347,8 @@ def create_app(
     def reload_data(user=Depends(require(Role.ADMIN.value))):
         if reload_fn is None:
             raise HTTPException(status_code=501, detail="Reload is not configured")
+        from app.data import loaders
+        loaders.clear_cache()
         state["svc"] = reload_fn()
         return {"status": "reloaded", "cutoff": state["svc"].cutoff, "data_generated_at": state["svc"].meta.get("generated_at")}
 
@@ -355,11 +366,19 @@ def create_app(
 
     from app.api.extended import register
     register(app, {"state": state, "ledger": ledger, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
-                   "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn, "jobs": jobs})
+                   "runs": runs, "chats": chats, "llm": llm, "store_dir": store_dir, "reload_fn": reload_fn, "jobs": jobs,
+                   "mcp_store": mcp})
     from app.api.ops_routes import register_ops
     register_ops(app, {"state": state, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
                        "schedules": schedules, "notes": notes, "scenarios": scenarios, "store_dir": store_dir,
                        "ledger": ledger})
+    from app.api.tasks import register as register_tasks
+    register_tasks(app, {"state": state, "require": require, "decisions": decisions, "all_roles": ALL_ROLES,
+                         "notes": notes, "store_dir": store_dir})
+    from app.api.mcp import register as register_mcp
+    register_mcp(app, {"state": state, "require": require, "all_roles": ALL_ROLES, "mcp_store": mcp})
+    from app.api.bi import register as register_bi
+    register_bi(app, {"require": require, "all_roles": ALL_ROLES, "write_roles": WRITE_ROLES, "llm": llm})
     return app
 
 
@@ -417,11 +436,20 @@ def create_default_app() -> FastAPI:
     else:
         ledger_impl = Ledger(settings.store_dir / "ledger.db")
 
+    svc = loader()
+    try:
+        from app.seed_demo_fva import seed_demo_fva
+        n = seed_demo_fva(ledger_impl, svc)
+        if n:
+            log.info("Seeded %d historical override(s) so the FVA scorecard has matured rows", n)
+    except Exception:
+        log.exception("FVA demo seed failed; continuing without it")
+
     client = client_from_env()
     if client is None:
         log.warning("No LLM key set (EMERGENT_LLM_KEY / GEMINI_API_KEY): narratives use the deterministic text")
     return create_app(
-        service=loader(), ledger=ledger_impl, users=users, secret=secret,
+        service=svc, ledger=ledger_impl, users=users, secret=secret,
         store_dir=settings.store_dir, cors_origins=settings.cors_origins, token_minutes=settings.token_minutes,
         reload_fn=loader, narrator=Narrator(client, settings.store_dir / "narratives.db"), db=db, llm=client,
     )

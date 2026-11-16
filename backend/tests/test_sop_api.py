@@ -280,11 +280,11 @@ class TestExtended:
         assert "Croston" in text and "unavailable" not in text  # LLM paraphrase or local KB, never the dead-end message
 
     def test_fva_pending(self, tokens):
-        """The FVA scorecard reports overrides awaiting actuals so it is never blank."""
+        """The FVA scorecard reports matured (scored) and pending overrides so it is never blank."""
         d = requests.get(f"{API}/fva", headers=h(tokens, "planner"), timeout=60).json()
         assert "pending_overrides" in d and "pending" in d
-        assert d["matured_overrides"] == 0  # current cycle targets a month with no actuals yet
-        assert d["pending_overrides"] >= 1
+        assert d["matured_overrides"] >= 1  # demo seed provides scored historical overrides
+        assert d["pending_overrides"] >= 1  # current-cycle decisions await the target month's actuals
         assert all("n_overrides" in p and "volume" in p for p in d["pending"])
 
     def test_assistant_view_operation(self, tokens):

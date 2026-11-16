@@ -4,17 +4,18 @@ import { monthLabel } from "../lib/format";
 import NotificationBell from "./NotificationBell";
 
 export const PAGES = [
-  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["scenarios", "Scenarios"], ["supply", "Supply & Risk"], ["operations", "Operations"], ["copilot", "Co-pilot"],
+  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["scenarios", "Scenarios"], ["supply", "Supply & Risk"], ["operations", "Operations"], ["bi", "BI dashboards"], ["copilot", "Co-pilot"],
 ];
 
 export default function Header({ summary, user, onExport, onCommit, onLogout, committing, page, onPage, onBriefing, onNotification }) {
   const canWrite = user.role === "planner" || user.role === "admin";
   const canCommit = canWrite && summary && !summary.committed && summary.pending_decisions === 0;
+  const pages = user.role === "admin" ? [...PAGES, ["mcp", "MCP"]] : PAGES;
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-8 pt-4 sticky top-0 z-50">
      <div className="flex justify-between items-center gap-4 flex-wrap">
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-3">
+        <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
           <Layers className="text-indigo-400 h-6 w-6" />
           UK Demand Planning S&amp;OP Workbench
         </h1>
@@ -22,7 +23,8 @@ export default function Header({ summary, user, onExport, onCommit, onLogout, co
           <p className="text-xs text-slate-400 mt-0.5">
             Last actuals: <span className="text-slate-200 font-semibold">{monthLabel(summary.cutoff)}</span> | Planning from{" "}
             <span className="text-slate-200 font-semibold">{monthLabel(summary.first_month)}</span> | Signed in as{" "}
-            <span className="text-indigo-300 font-semibold">{user.username}</span> ({user.role})
+            <span className="text-indigo-300 font-semibold">{user.username}</span> ({user.role}
+            {user.tenant ? ` · ${user.tenant}` : ""})
             {summary.committed && <span className="ml-2 text-emerald-400 font-semibold">Cycle committed</span>}
           </p>
         )}
@@ -52,9 +54,9 @@ export default function Header({ summary, user, onExport, onCommit, onLogout, co
       </div>
      </div>
       <nav className="flex gap-1 mt-3 overflow-x-auto" aria-label="Sections">
-        {PAGES.map(([id, label]) => (
+        {pages.map(([id, label]) => (
           <button key={id} data-testid={`nav-${id}`} onClick={() => onPage(id)}
-            className={`px-3 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${page === id ? "border-indigo-400 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            className={`px-3 py-2 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${page === id ? "border-indigo-400 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
             {label}
           </button>
         ))}

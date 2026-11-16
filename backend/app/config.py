@@ -20,6 +20,9 @@ class Settings:
     mongo_db: str = os.getenv("DB_NAME", os.getenv("MONGO_DB", "sop"))
     demo_mode: bool = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
     hybrid_search: str = os.getenv("HYBRID_SEARCH", "tier1").strip().lower()
+    app_env: str = os.getenv("APP_ENV", "local").strip().lower()
+    ai_ask_quota: int = int(os.getenv("AI_ASK_QUOTA", "0"))
+    ai_ask_window_s: int = int(os.getenv("AI_ASK_WINDOW_S", "3600"))
 
 
 settings = Settings()

@@ -1,0 +1,17 @@
+# Pinned to the exact Playwright release in package.json so the OS font stack and
+# anti-aliasing match between a developer machine and CI. A screenshot rendered on
+# a different base image is a different screenshot, which is the failure mode this
+# suite exists to avoid.
+FROM mcr.microsoft.com/playwright:v1.55.1-noble
+
+WORKDIR /work
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+# playwright.config.js starts the Vite dev server itself when CI is set.
+ENV CI=1
+
+CMD ["npx", "playwright", "test"]

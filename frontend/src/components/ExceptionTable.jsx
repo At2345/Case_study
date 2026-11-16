@@ -5,6 +5,7 @@ import { fmtNum, fmtGbp, RISK_LABELS, RISK_STYLES } from "../lib/format";
 const STATES = [
   { value: "EXCEPTION_REVIEW", label: "Exceptions" },
   { value: "PLANNER_LED", label: "Planner-led" },
+  { value: "AUTO_APPROVED", label: "Autopilot" },
 ];
 const CHANNELS = ["", "amazon", "B2B wo Amazon", "D2C"];
 const RISKS = ["", ...Object.keys(RISK_LABELS)];
@@ -19,9 +20,16 @@ export default function ExceptionTable({ data, filters, onFilters, selectedId, o
         <div className="flex justify-between items-center">
           <div>
             <h2 className="font-semibold text-white text-sm flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-indigo-400" /> Prioritised action queue (ranked by financial exposure)
+              <BarChart3 className="h-4 w-4 text-indigo-400" />
+              {filters.state === "AUTO_APPROVED"
+                ? "Touchless autopilot items (ML forecast is the plan)"
+                : "Prioritised action queue (ranked by financial exposure)"}
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">Select an item to see the drivers and record a decision.</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {filters.state === "AUTO_APPROVED"
+                ? "Auto-approved by triage: no review or decision required; the ML forecast is the final plan."
+                : "Select an item to see the drivers and record a decision."}
+            </p>
           </div>
           <span className="text-xs bg-indigo-950 text-indigo-300 border border-indigo-800/80 px-2.5 py-1 rounded-full font-medium">
             {data ? data.total : 0} items
@@ -85,7 +93,9 @@ export default function ExceptionTable({ data, filters, onFilters, selectedId, o
                   </span>
                 </td>
                 <td className="py-3 px-3 font-sans">
-                  {it.has_override ? (
+                  {it.state === "AUTO_APPROVED" ? (
+                    <span className="text-emerald-400 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Auto-approved</span>
+                  ) : it.has_override ? (
                     <span className="text-emerald-400 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Decided</span>
                   ) : (
                     <span className="text-slate-500">Pending</span>

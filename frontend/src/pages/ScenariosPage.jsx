@@ -94,7 +94,7 @@ function ScenarioGenerator({ onGenerated, initialPrompt, externalPrompt }) {
   };
   return (
     <form onSubmit={submit} data-testid="scenario-generator" className="space-y-2 bg-slate-950/60 border border-slate-800 rounded-xl p-3">
-      <div className="flex items-center gap-2 text-xs font-semibold text-white"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Generate scenario</div>
+      <div className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Generate scenario</div>
       <textarea data-testid="scenario-prompt-input" rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} maxLength={500}
         placeholder="e.g. 15% B2B upside for high-margin products next month" className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200" />
       <ErrorNote error={error} />
@@ -119,7 +119,7 @@ function ScenarioForm({ initial, monthList, onSave, onCancel }) {
   return (
     <form onSubmit={submit} data-testid="scenario-form" className="space-y-3 bg-slate-950 border border-indigo-900/60 rounded-xl p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold text-white uppercase tracking-wider">{initial && initial.id ? "Edit scenario" : initial ? "Generated scenario draft" : "New scenario from the current consensus"}</h3>
+        <h3 className="text-sm font-bold text-white uppercase tracking-wider">{initial && initial.id ? "Edit scenario" : initial ? "Generated scenario draft" : "New scenario from the current consensus"}</h3>
         <button type="button" onClick={onCancel} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
       <input data-testid="scenario-name-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="e.g. B2B campaign upside"

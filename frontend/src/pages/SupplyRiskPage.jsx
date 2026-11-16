@@ -67,7 +67,7 @@ export default function SupplyRiskPage({ onNavigateAction }) {
             <SafetySummary s={ss.summary} />
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div>
-                <h3 className="text-xs font-semibold text-slate-300 mb-2">Band calibration (out-of-sample, last cutoff)</h3>
+                <h3 className="text-sm font-semibold text-slate-300 mb-2">Band calibration (out-of-sample, last cutoff)</h3>
                 <DataTable testId="coverage-table" rows={ss.coverage}
                   columns={[{ key: "channel", label: "Channel" }, { key: "hb", label: "Horizon" },
                     { key: "rows", label: "Rows", right: true, render: (r) => fmtNum(r.rows) },
@@ -75,13 +75,13 @@ export default function SupplyRiskPage({ onNavigateAction }) {
                 <p className="text-[10px] text-slate-500 mt-2">Target 80%. Higher means the bands are conservative (wide).</p>
                 {ss.coverage_history && ss.coverage_history.length > 0 && (
                   <>
-                    <h3 className="text-xs font-semibold text-slate-300 mt-5 mb-2">Band calibration history (per cycle run)</h3>
+                    <h3 className="text-sm font-semibold text-slate-300 mt-5 mb-2">Band calibration history (per cycle run)</h3>
                     <DataTable testId="coverage-history-table" rows={ss.coverage_history}
                       columns={[{ key: "started_at", label: "Run at", render: (r) => new Date(r.started_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) },
                         { key: "band_coverage", label: "P10-P90 cover", right: true, render: (r) => pct(r.band_coverage) }]} />
                   </>
                 )}
-                <h3 className="text-xs font-semibold text-slate-300 mt-5 mb-2">Lead times (order book)</h3>
+                <h3 className="text-sm font-semibold text-slate-300 mt-5 mb-2">Lead times (order book)</h3>
                 <DataTable rows={ss.summary.lead_times}
                   columns={[{ key: "channel", label: "Channel" },
                     { key: "lt_days_mean", label: "Mean days", right: true, render: (r) => fmtNum(r.lt_days_mean, 1) },
@@ -89,7 +89,7 @@ export default function SupplyRiskPage({ onNavigateAction }) {
               </div>
               <div className="lg:col-span-2">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-semibold text-slate-300">Largest holding-cost savings ({fmtNum(ss.total)} items)</h3>
+                  <h3 className="text-sm font-semibold text-slate-300">Largest holding-cost savings ({fmtNum(ss.total)} items)</h3>
                   <select data-testid="ss-channel-select" value={channel} onChange={(e) => setChannel(e.target.value)}
                     className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200">
                     <option value="">All channels</option><option value="amazon">Amazon</option>
@@ -128,7 +128,7 @@ export default function SupplyRiskPage({ onNavigateAction }) {
                 { key: "penalty_gbp", label: "Penalty", right: true, render: (r) => fmtGbpPlain(r.penalty_gbp) }]} />
             {otif.by_customer && otif.by_customer.length > 0 && (
               <div>
-                <h3 className="text-xs font-semibold text-slate-300 mb-2">By customer (booked share of the uncovered units)</h3>
+                <h3 className="text-sm font-semibold text-slate-300 mb-2">By customer (booked share of the uncovered units)</h3>
                 <DataTable testId="otif-customer-table" rows={otif.by_customer.slice(0, 15)}
                   columns={[{ key: "customer_id", label: "Customer" }, { key: "item_id", label: "Item" },
                     { key: "month", label: "Month", render: (r) => monthLabel(r.month) },

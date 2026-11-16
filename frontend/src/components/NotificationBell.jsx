@@ -45,7 +45,7 @@ export default function NotificationBell({ onNavigate }) {
       {open && (
         <div data-testid="notification-panel" className="absolute right-0 mt-2 w-96 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[70]">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-            <span className="text-xs font-bold text-white">Notifications</span>
+            <span className="text-sm font-bold text-white">Notifications</span>
             <button data-testid="notification-read-all-btn" onClick={readAll} disabled={data.unread === 0}
               className="text-[11px] text-indigo-300 hover:text-indigo-200 disabled:opacity-40 flex items-center gap-1">
               <CheckCheck className="h-3.5 w-3.5" /> Mark all read

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.ai.privacy import scrub
 from app.narrative.guardrails import validate_narrative
 from app.narrative.prompt import PROMPT_VERSION, build_messages
 
@@ -61,7 +62,7 @@ class Narrator:
         try:
             text = (self.client.generate(system, user) or "").strip()
         except Exception as exc:  # network, quota, SDK missing: the planner still gets the template
-            log.warning("narrative generation failed: %s: %s", type(exc).__name__, str(exc)[:200])
+            log.warning("narrative generation failed: %s: %s", type(exc).__name__, scrub(str(exc))[:200])
             return self._template(fallback, [f"llm_error: {type(exc).__name__}"])
         ok, reasons = validate_narrative(text, telemetry)
         if not ok:

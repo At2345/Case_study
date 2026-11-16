@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from app.api.tasks import task_for_question
 from app.config import REPO_ROOT
 from app.narrative.concepts import lookup_concept
 
@@ -17,6 +18,9 @@ STRUCTURED_INTENTS: Dict[str, tuple] = {
     "fva": ("fva", "forecast value added", "override value"),
     "cycle": ("cutoff", "pending decisions", "cycle summary", "cycle status"),
 }
+
+# Words that mark a question as asking for an explanation of a task ("explain promo sanity check").
+EXPLAIN_WORDS = ("explain", "what does", "what's", "how does", "tell me about", "describe", "meaning", "means", "what is")
 
 # Channel words are qualifiers only - they never trigger an intent by themselves.
 CHANNELS = ("amazon", "b2b", "d2c")
@@ -62,6 +66,10 @@ def _tokens(text: str) -> List[str]:
 def _structured_intent(question: str) -> Optional[tuple]:
     """Returns (intent, channel) or None. Channel is a qualifier, never an intent trigger by itself."""
     q = question.lower()
+    if any(w in q for w in EXPLAIN_WORDS):
+        task = task_for_question(question)
+        if task:
+            return ("task", task["id"])
     channel = next((ch for ch in CHANNELS if ch in q), None)
     for intent, words in STRUCTURED_INTENTS.items():
         if any(w in q for w in words):
@@ -118,6 +126,10 @@ def retrieve(question: str, svc, ledger, mode: str) -> Retrieval:
     intent = _structured_intent(question)
     if intent:
         name, channel = intent
+        if name == "task":
+            m = task_for_question(question)
+            if m:
+                return Retrieval(tier="project", sources=[Source(kind="task", title=m["title"], snippet=m["description"])])
         title = f"{name}:{channel}" if channel else name
         return Retrieval(tier="project", sources=[Source(kind="structured", title=title)])
     concept = lookup_concept(question)

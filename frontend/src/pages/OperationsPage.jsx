@@ -211,11 +211,21 @@ export default function OperationsPage({ role, onReloaded, onNavigateAction, ini
       )}
       <Panel title="Data quality gate" testId="quality-gate-panel"
         subtitle="Warnings from the ingest/validate step of the monthly cycle; the gate halts the run on schema violations.">
-        {quality && quality.quality_warnings && quality.quality_warnings.length > 0 ? (
-          <ul className="text-[11px] text-amber-200 space-y-0.5">{quality.quality_warnings.map((w) => <li key={`${w.channel}-${w.month}`}>{warningText(w)}</li>)}</ul>
-        ) : (
-          <div className="text-xs text-emerald-300">No data-quality warnings in the current cycle.</div>
-        )}
+        {(() => {
+          const latest = runs && runs.runs.find((r) => r.kind === "monthly_cycle");
+          const ingest = latest && (latest.steps || []).find((s) => s.node === "ingest_validate");
+          const warnings = (quality && quality.quality_warnings) || [];
+          return (
+            <div className="space-y-2">
+              {ingest && ingest.summary && <div className="text-[11px] text-slate-300">{ingest.summary}</div>}
+              {warnings.length > 0 ? (
+                <ul className="text-[11px] text-amber-200 space-y-0.5">{warnings.map((w) => <li key={`${w.channel}-${w.month}`}>{warningText(w)}</li>)}</ul>
+              ) : (
+                <div className="text-xs text-emerald-300">No data-quality warnings in the current cycle.</div>
+              )}
+            </div>
+          );
+        })()}
       </Panel>
     </div>
   );

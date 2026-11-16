@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, List, Optional, Tuple
 
+from app.ai.privacy import scrub
+
 log = logging.getLogger("sop.llm")
 
 # Provider health registry: {name: {"configured": bool, "ok": bool|None, "error": str|None, "at": float|None}}
@@ -61,7 +63,10 @@ class FailoverClient:
     clients: List[Any]
 
     def _note(self, name: str, ok: bool, error: Optional[str] = None) -> None:
-        PROVIDER_STATUS[name] = {"configured": True, "ok": ok, "error": error, "at": time.time()}
+        # Served to the browser by /api/v1/assistant/providers, and a provider error can
+        # echo the request body back, so the message is redacted before it is stored.
+        PROVIDER_STATUS[name] = {"configured": True, "ok": ok,
+                                 "error": scrub(error) if error else error, "at": time.time()}
 
     def generate(self, system: str, user: str) -> str:
         last: Optional[Exception] = None
@@ -97,15 +102,30 @@ def client_from_env():
     """Providers in priority order: Emergent universal key, direct Gemini key, GLM key,
     then a local open-source model (LOCAL_MODEL, e.g. google/flan-t5-base).
     Multiple configured providers are wrapped in a FailoverClient so a quota-exhausted
-    provider (e.g. Gemini free tier) falls through to the next. None means deterministic narratives only."""
+    provider (e.g. Gemini free tier) falls through to the next. None means deterministic narratives only.
+
+    The result is wrapped in a PrivacyClient, so every prompt is redacted before it leaves
+    the process. AI_REQUIRE_ZDR removes providers that are not declared in AI_ZDR_PROVIDERS;
+    if that leaves nothing, no external call is made and the deterministic text is used."""
+    from app.ai.privacy import PrivacyClient, ProviderPolicy, set_active
     from app.narrative.client import GeminiClient, GlmClient
     from app.narrative.local_hf import LocalHfClient
-    clients = [c for c in (EmergentLlmClient.from_env(), GeminiClient.from_env(),
-                           GlmClient.from_env(), LocalHfClient.from_env()) if c is not None]
-    for c in clients:
+    candidates = [c for c in (EmergentLlmClient.from_env(), GeminiClient.from_env(),
+                              GlmClient.from_env(), LocalHfClient.from_env()) if c is not None]
+    for c in candidates:
         PROVIDER_STATUS.setdefault(type(c).__name__, {"configured": True, "ok": None, "error": None, "at": None})
-    if not clients:
+    policy = ProviderPolicy.from_env()
+    names = [type(c).__name__ for c in candidates]
+    permitted = [c for c in candidates if policy.permits(c)]
+    allowed = {type(c).__name__ for c in permitted}
+    for name in names:
+        if name not in allowed:
+            PROVIDER_STATUS[name] = {"configured": True, "ok": False,
+                                     "error": "refused: not declared zero-retention",
+                                     "at": time.time()}
+            log.warning("AI_REQUIRE_ZDR is set and %s is not declared in AI_ZDR_PROVIDERS; refusing it", name)
+    set_active(policy, names)
+    if not permitted:
         return None
-    if len(clients) == 1:
-        return clients[0]
-    return FailoverClient(clients)
+    inner = permitted[0] if len(permitted) == 1 else FailoverClient(permitted)
+    return PrivacyClient(inner)

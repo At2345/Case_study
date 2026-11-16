@@ -6,7 +6,9 @@ import pytest
 import requests
 
 BASE = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/") + "/api/v1"
-CREDS = {"danny": "PlannerPass2026!", "admin": "AdminPass2026!", "auditor": "AuditorPass2026!"}
+CREDS = {"danny": os.environ.get("TEST_PLANNER_PASSWORD", "PlannerPass2026!"),
+         "admin": os.environ.get("TEST_ADMIN_PASSWORD", "AdminPass2026!"),
+         "auditor": os.environ.get("TEST_AUDITOR_PASSWORD", "AuditorPass2026!")}
 _tok = {}
 
 
