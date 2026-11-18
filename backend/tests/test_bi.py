@@ -909,6 +909,17 @@ class TestTenantIsolation:
         assert first["cycle"]["tenant_id"] == "default"
         assert second["cycle"]["tenant_id"] == "globex"
 
+    def test_the_cross_filter_breakdown_is_scoped(self, shared_mart):
+        """An unscoped breakdown would double every count in a two-tenant mart."""
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        with scoped(shared_mart, "default") as con:
+            first = _exceptions_breakdown(con)
+            expected = con.execute(
+                "SELECT COUNT(*) FROM triage_items WHERE state = 'EXCEPTION_REVIEW'").fetchone()[0]
+        assert first["totals"]["exceptions"] == expected
+        assert sum(r["count"] for r in first["exceptions_by_channel"]) == expected
+
     def test_metric_values_are_scoped(self, shared_mart):
         """An unscoped aggregate would sum both tenants' cycle rows."""
         from app.bi.finops import QueryTag
@@ -1030,3 +1041,79 @@ class TestTenantSession:
         d = requests.get(f"{BASE}/bi/dashboard?tenant_id=globex", headers=h("danny"),
                          timeout=120).json()
         assert d["cycle"]["tenant_id"] == "default"
+
+
+class TestCrossFilter:
+    """Chart-to-chart filtering over the exception breakdowns."""
+
+    @pytest.fixture(scope="class")
+    def breakdown(self, mart):
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        with scoped(mart, "default") as con:
+            return _exceptions_breakdown(con)
+
+    def test_the_unfiltered_breakdown_matches_the_dashboard(self, mart, breakdown):
+        from app.api.bi import dashboard_payload
+        payload = dashboard_payload(mart, "default")
+        for key in ("exceptions_by_channel", "var_by_risk_type", "top_exceptions"):
+            assert breakdown[key] == payload[key]
+
+    def test_the_top_list_stays_capped_at_ten(self, breakdown):
+        assert len(breakdown["top_exceptions"]) <= 10
+
+    def test_a_channel_filter_narrows_the_risk_breakdown(self, mart, breakdown):
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        channel = breakdown["exceptions_by_channel"][0]["channel"]
+        with scoped(mart, "default") as con:
+            filtered = _exceptions_breakdown(con, channel=channel)
+        assert filtered["filter"] == {"channel": channel, "risk_type": None}
+        assert all(r["channel"] == channel for r in filtered["top_exceptions"])
+        assert sum(r["var_gbp"] for r in filtered["var_by_risk_type"]) <= sum(
+            r["var_gbp"] for r in breakdown["var_by_risk_type"])
+
+    def test_a_chart_does_not_filter_its_own_dimension(self, mart, breakdown):
+        """Picking a channel must leave every channel visible so the pick can change."""
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        channel = breakdown["exceptions_by_channel"][0]["channel"]
+        with scoped(mart, "default") as con:
+            filtered = _exceptions_breakdown(con, channel=channel)
+        assert filtered["exceptions_by_channel"] == breakdown["exceptions_by_channel"]
+
+    def test_a_risk_filter_narrows_the_channel_breakdown(self, mart, breakdown):
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        risk = breakdown["var_by_risk_type"][0]["risk_type"]
+        with scoped(mart, "default") as con:
+            filtered = _exceptions_breakdown(con, risk_type=risk)
+        assert filtered["var_by_risk_type"] == breakdown["var_by_risk_type"]
+        assert all(r["risk_type"] == risk for r in filtered["top_exceptions"])
+        assert sum(r["count"] for r in filtered["exceptions_by_channel"]) <= sum(
+            r["count"] for r in breakdown["exceptions_by_channel"])
+
+    def test_both_filters_apply_to_the_top_list(self, mart, breakdown):
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        channel = breakdown["exceptions_by_channel"][0]["channel"]
+        risk = breakdown["var_by_risk_type"][0]["risk_type"]
+        with scoped(mart, "default") as con:
+            filtered = _exceptions_breakdown(con, channel=channel, risk_type=risk)
+        assert all(r["channel"] == channel and r["risk_type"] == risk
+                   for r in filtered["top_exceptions"])
+
+    def test_the_totals_match_the_unfiltered_breakdown(self, breakdown):
+        assert breakdown["totals"]["exceptions"] == sum(
+            r["count"] for r in breakdown["exceptions_by_channel"])
+        assert breakdown["totals"]["var_gbp"] == pytest.approx(
+            sum(r["var_gbp"] for r in breakdown["var_by_risk_type"]))
+
+    def test_the_totals_follow_the_filter(self, mart, breakdown):
+        from app.api.bi import _exceptions_breakdown
+        from app.bi.tenancy import scoped
+        channel = breakdown["exceptions_by_channel"][0]["channel"]
+        with scoped(mart, "default") as con:
+            filtered = _exceptions_breakdown(con, channel=channel)
+        assert filtered["totals"]["exceptions"] == next(
+            r["count"] for r in breakdown["exceptions_by_channel"] if r["channel"] == channel)

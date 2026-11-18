@@ -18,6 +18,14 @@ const STATE_LABELS = {
   INACTIVE: "Inactive",
 };
 
+const INSIGHT_TONES = {
+  indigo: "border-indigo-800 bg-indigo-950/40 text-indigo-100",
+  amber: "border-amber-800 bg-amber-950/30 text-amber-100",
+  rose: "border-rose-800 bg-rose-950/30 text-rose-100",
+  emerald: "border-emerald-800 bg-emerald-950/30 text-emerald-100",
+  slate: "border-slate-800 bg-slate-900 text-slate-300",
+};
+
 const PERSONAS = [
   { id: "executive", label: "Executive", hint: "Outcome KPIs and the plan, on a quarterly horizon." },
   { id: "operations", label: "Operations", hint: "Where the exceptions sit and what is being done about them." },
@@ -106,6 +114,9 @@ export default function BiPage({ role }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [persona, setPersona] = useState("analyst");
+  const [filter, setFilter] = useState({ channel: null, risk_type: null });
+  const [breakdown, setBreakdown] = useState(null);
+  const [filterBusy, setFilterBusy] = useState(false);
   const isAdmin = role === "admin";
   const canWrite = role === "planner" || role === "admin";
 
@@ -138,6 +149,25 @@ export default function BiPage({ role }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const { channel, risk_type } = filter;
+    if (!channel && !risk_type) {
+      setBreakdown(null);
+      return undefined;
+    }
+    let live = true;
+    setFilterBusy(true);
+    api.biDashboardExceptions({ channel: channel || "", risk_type: risk_type || "" })
+      .then((r) => { if (live) setBreakdown(r); })
+      .catch((e) => { if (live) setError(e.message); })
+      .finally(() => { if (live) setFilterBusy(false); });
+    return () => { live = false; };
+  }, [filter, data]);
+
+  const pickChannel = (value) => setFilter((f) => ({ ...f, channel: value || null }));
+  const pickRisk = (value) => setFilter((f) => ({ ...f, risk_type: value || null }));
+  const clearFilters = () => setFilter({ channel: null, risk_type: null });
 
   const measureTransport = async () => {
     setTransportBusy(true);
@@ -258,6 +288,55 @@ export default function BiPage({ role }) {
     ? `${((varianceValue / baselineValue) * 100).toFixed(1)}% vs baseline`
     : null;
 
+  const filtered = Boolean(filter.channel || filter.risk_type);
+  const view = breakdown || data;
+  const channelRows = (view && view.exceptions_by_channel) || [];
+  const riskRows = (view && view.var_by_risk_type) || [];
+  const topRows = (view && view.top_exceptions) || [];
+  const exceptionCount = channelRows.reduce((sum, r) => sum + (Number(r.count) || 0), 0);
+  const varTotal = riskRows.reduce((sum, r) => sum + (Number(r.var_gbp) || 0), 0);
+  const scopeTotals = (view && view.totals) || { exceptions: exceptionCount, var_gbp: varTotal };
+  const share = (part, whole) => (whole ? Math.round((Math.abs(part) / Math.abs(whole)) * 100) : 0);
+
+  const insights = [];
+  if (filtered) {
+    const parts = [filter.channel, filter.risk_type && riskLabel(filter.risk_type)].filter(Boolean);
+    insights.push({
+      id: "scope", tone: "indigo",
+      text: `${parts.join(" \u00d7 ")}: ${fmtNum(scopeTotals.exceptions)} exceptions, ${fmtGbpPlain(scopeTotals.var_gbp)} value at risk.`,
+    });
+  }
+  if (channelRows.length) {
+    const top = channelRows[0];
+    insights.push({
+      id: "channel", tone: "amber",
+      text: `${top.channel} holds ${share(top.count, exceptionCount)}% of the ${fmtNum(exceptionCount)} exceptions in review.`,
+    });
+  }
+  if (riskRows.length) {
+    const top = riskRows[0];
+    insights.push({
+      id: "risk", tone: "rose",
+      text: `${riskLabel(top.risk_type)} is ${share(top.var_gbp, varTotal)}% of the ${fmtGbpPlain(varTotal)} value at risk.`,
+    });
+  }
+  if (months.length) {
+    const planTotal = months.reduce((sum, m) => sum + (Number(m.plan) || 0), 0);
+    const baseTotal = months.reduce((sum, m) => sum + (Number(m.baseline) || 0), 0);
+    const delta = baseTotal ? ((planTotal - baseTotal) / baseTotal) * 100 : 0;
+    insights.push({
+      id: "plan", tone: delta < 0 ? "rose" : "emerald",
+      text: `Plan runs ${Math.abs(delta).toFixed(1)}% ${delta < 0 ? "below" : "above"} baseline across ${months.length} months (${fmtNum(planTotal)} vs ${fmtNum(baseTotal)} units).`,
+    });
+  }
+  if (topRows.length) {
+    const top = topRows[0];
+    insights.push({
+      id: "exposure", tone: "slate",
+      text: `Largest single exposure: ${top.item_id} on ${top.channel} at ${fmtGbpPlain(top.var_gbp)}.`,
+    });
+  }
+
   const PANELS = {
     triage: () => (
       <Panel title="Triage mix" testId="bi-triage-mix" className="h-full"
@@ -267,16 +346,25 @@ export default function BiPage({ role }) {
       </Panel>
     ),
     channel: () => (
-      <Panel title="Exceptions by channel" testId="bi-channel-panel" className="h-full">
+      <Panel title="Exceptions by channel" testId="bi-channel-panel" className="h-full"
+        subtitle={filtered ? "Click a bar to switch the channel filter; click it again to clear." : "Click a bar to filter the risk mix and the exception list."}>
         <BarChart testId="bi-channel-bars" label="Exceptions by channel"
-          data={(data.exceptions_by_channel || []).map((r) => ({ label: r.channel, value: r.count }))} />
+          data={channelRows.map((r) => ({ label: r.channel, value: r.count }))}
+          onSelect={pickChannel} selected={filter.channel} selectLabel="Filter by channel" />
       </Panel>
     ),
     risk: () => (
-      <Panel title="Value at risk by risk type" testId="bi-risk-panel" className="h-full">
+      <Panel title="Value at risk by risk type" testId="bi-risk-panel" className="h-full"
+        subtitle={filtered ? "Click a row to switch the risk filter; click it again to clear." : "Click a row to filter the channel mix and the exception list."}>
         <HBarList testId="bi-risk-bars" color={IBCS.negative} format={fmtGbpPlain}
           label="Value at risk by risk type"
-          data={(data.var_by_risk_type || []).map((r) => ({ label: riskLabel(r.risk_type), value: r.var_gbp }))} />
+          data={riskRows.map((r) => ({ label: riskLabel(r.risk_type), value: r.var_gbp }))}
+          onSelect={(label) => {
+            const hit = riskRows.find((r) => riskLabel(r.risk_type) === label);
+            pickRisk(hit ? hit.risk_type : null);
+          }}
+          selected={filter.risk_type ? riskLabel(filter.risk_type) : null}
+          selectLabel="Filter by risk type" />
       </Panel>
     ),
     overrides: () => (
@@ -319,8 +407,9 @@ export default function BiPage({ role }) {
       </Panel>
     ),
     top: () => (
-      <Panel title="Top exceptions by value at risk" testId="bi-top-panel">
-        <DataTable testId="bi-top-table" rows={data.top_exceptions || []} empty="No exceptions in this cycle."
+      <Panel title="Top exceptions by value at risk" testId="bi-top-panel"
+        subtitle={`The 10 largest absolute exposures${filtered ? " within the current filter" : ""}; the full exception population is not listed here.`}>
+        <DataTable testId="bi-top-table" rows={topRows} empty="No exceptions in this cycle."
           columns={[
             { key: "item_id", label: "Item", render: (r) => <span className="font-mono text-slate-200">{r.item_id}</span> },
             { key: "product_id", label: "Product" },
@@ -544,6 +633,48 @@ export default function BiPage({ role }) {
       )}
 
       {!data && !error && <div className="text-xs text-slate-400">Loading dashboard...</div>}
+
+      {data && insights.length > 0 && (
+        <div data-testid="bi-insights" className="flex flex-wrap gap-2">
+          {insights.map((i) => (
+            <span key={i.id} data-testid={`bi-insight-${i.id}`}
+              className={`rounded-lg border px-3 py-2 text-[11px] leading-snug ${INSIGHT_TONES[i.tone] || INSIGHT_TONES.slate}`}>
+              {i.text}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {data && (
+        <div data-testid="bi-filter-bar"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-[11px]">
+          <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">Cross-filter</span>
+          {filter.channel && (
+            <button type="button" data-testid="bi-filter-channel" onClick={() => pickChannel(null)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-700 bg-indigo-950 px-2.5 py-1 text-indigo-200 hover:bg-indigo-900">
+              Channel: {filter.channel} <span aria-hidden="true">&times;</span>
+            </button>
+          )}
+          {filter.risk_type && (
+            <button type="button" data-testid="bi-filter-risk" onClick={() => pickRisk(null)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-700 bg-indigo-950 px-2.5 py-1 text-indigo-200 hover:bg-indigo-900">
+              Risk: {riskLabel(filter.risk_type)} <span aria-hidden="true">&times;</span>
+            </button>
+          )}
+          {!filtered && (
+            <span data-testid="bi-filter-hint" className="text-slate-500">
+              Select a channel bar or a risk row to narrow the other chart and the exception list.
+            </span>
+          )}
+          {filtered && (
+            <button type="button" data-testid="bi-filter-clear" onClick={clearFilters}
+              className="ml-auto rounded border border-slate-700 px-2.5 py-1 font-semibold text-slate-300 hover:bg-slate-800">
+              Clear all
+            </button>
+          )}
+          {filterBusy && <span data-testid="bi-filter-busy" className="text-slate-400">Updating...</span>}
+        </div>
+      )}
 
       {data && (
         <div className="space-y-8">

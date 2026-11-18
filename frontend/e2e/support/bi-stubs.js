@@ -62,6 +62,7 @@ export const dashboard = () => ({
     { item_id: 100001, product_id: "PROD_2742", channel: "D2C", risk_type: "OOS_RISK", var_gbp: 1200, value_delta_gbp: -300 },
     { item_id: 100002, product_id: "PROD_1180", channel: "AMAZON", risk_type: "OVERSTOCK_RISK", var_gbp: 940, value_delta_gbp: 210 },
   ],
+  totals: { exceptions: 74, var_gbp: 20000 },
   overrides_by_reason: [
     { reason_code: "Promotion", count: 10 },
     { reason_code: "Supply constraint", count: 6 },
@@ -102,6 +103,20 @@ export const dashboard = () => ({
     cycle_cutoff: "2026-02-01",
     first_month: "2026-03-01",
   },
+});
+
+export const dashboardExceptions = () => ({
+  exceptions_by_channel: [
+    { channel: "AMAZON", count: 40 },
+    { channel: "D2C", count: 20 },
+    { channel: "B2B", count: 14 },
+  ],
+  var_by_risk_type: [{ risk_type: "OOS_RISK", var_gbp: 12000 }],
+  top_exceptions: [
+    { item_id: 100001, product_id: "PROD_2742", channel: "D2C", risk_type: "OOS_RISK", var_gbp: 1200, value_delta_gbp: -300 },
+  ],
+  totals: { exceptions: 20, var_gbp: 12000 },
+  filter: { channel: "D2C", risk_type: null },
 });
 
 export const kpiTree = () => ({
@@ -351,6 +366,7 @@ const ROUTES = {
   "/api/v1/exceptions": () => ({ items: [], total: 0 }),
   "/api/v1/notifications": () => ({ unread: 0, items: [] }),
   "/api/v1/bi/dashboard": dashboard,
+  "/api/v1/bi/dashboard/exceptions": dashboardExceptions,
   "/api/v1/bi/kpi-tree": kpiTree,
   "/api/v1/bi/metrics": metricCatalog,
   "/api/v1/bi/diagnostics": diagnostics,

@@ -5,7 +5,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("../services/api", () => ({
   api: {
-    biDashboard: vi.fn(), biKpiTree: vi.fn(), biMetrics: vi.fn(), biDiagnostics: vi.fn(),
+    biDashboard: vi.fn(), biDashboardExceptions: vi.fn(), biKpiTree: vi.fn(), biMetrics: vi.fn(), biDiagnostics: vi.fn(),
     biContracts: vi.fn(),
     biFinops: vi.fn(),
     biServing: vi.fn(), biTransport: vi.fn(), biExportColumnar: vi.fn(),
@@ -36,6 +36,7 @@ const payload = (over = {}) => ({
     { month: "2026-04-01", plan: 110, baseline: 95, ml: 105 },
   ],
   top_exceptions: [{ item_id: 100001, product_id: "PROD_2742", channel: "D2C", risk_type: "OOS_RISK", var_gbp: 1200, value_delta_gbp: -300 }],
+  totals: { exceptions: 74, var_gbp: 20000 },
   overrides_by_reason: [{ reason_code: "Promotion", count: 10 }, { reason_code: "Supply constraint", count: 6 }],
   fva_by_planner: [{ planner_id: "danny", n_overrides: 22, n_accepted: 18, volume: 5000, fpe_ml: 0.31, fpe_planner: 0.28, fpe_baseline: 0.35, fva_pts: 1.2 }],
   quality_warnings: [{ channel: "AMAZON", month: "2026-02-01", imputed_share: 1.0, items: 3080 }],
@@ -55,6 +56,15 @@ const payload = (over = {}) => ({
     cycle_cutoff: "2026-02-01",
     first_month: "2026-03-01",
   },
+  ...over,
+});
+
+const breakdownFixture = (over = {}) => ({
+  exceptions_by_channel: [{ channel: "AMAZON", count: 40 }, { channel: "D2C", count: 20 }, { channel: "B2B", count: 14 }],
+  var_by_risk_type: [{ risk_type: "OOS_RISK", var_gbp: 3000 }],
+  top_exceptions: [{ item_id: 100002, product_id: "PROD_9001", channel: "D2C", risk_type: "OOS_RISK", var_gbp: 900, value_delta_gbp: -100 }],
+  totals: { exceptions: 20, var_gbp: 3000 },
+  filter: { channel: "D2C", risk_type: null },
   ...over,
 });
 
@@ -263,6 +273,7 @@ describe("BiPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.biDashboard.mockResolvedValue(payload());
+    api.biDashboardExceptions.mockResolvedValue(breakdownFixture());
     api.biKpiTree.mockResolvedValue(kpiTree());
     api.biMetrics.mockResolvedValue(metricCatalog());
     api.biDiagnostics.mockResolvedValue(diagnostics());
@@ -667,5 +678,91 @@ describe("BiPage", () => {
     await screen.findByTestId("bi-kpis");
     await user.click(screen.getByTestId("bi-refresh-btn"));
     await waitFor(() => expect(api.biDashboard).toHaveBeenCalledTimes(2));
+  });
+
+  it("summarises the payload in an insight strip", async () => {
+    render(<BiPage role="planner" />);
+    const strip = await screen.findByTestId("bi-insights");
+    expect(within(strip).getByTestId("bi-insight-channel"))
+      .toHaveTextContent("AMAZON holds 54% of the 74 exceptions in review.");
+    expect(within(strip).getByTestId("bi-insight-risk"))
+      .toHaveTextContent("OOS exposure is 60% of the £20,000 value at risk.");
+    expect(within(strip).getByTestId("bi-insight-plan"))
+      .toHaveTextContent("Plan runs 13.5% above baseline across 2 months");
+    expect(within(strip).getByTestId("bi-insight-exposure"))
+      .toHaveTextContent("Largest single exposure: 100001 on D2C at £1,200.");
+  });
+
+  it("does not claim a filtered scope before a chart is selected", async () => {
+    render(<BiPage role="planner" />);
+    await screen.findByTestId("bi-insights");
+    expect(screen.queryByTestId("bi-insight-scope")).toBeNull();
+    expect(screen.getByTestId("bi-filter-hint")).toBeInTheDocument();
+    expect(api.biDashboardExceptions).not.toHaveBeenCalled();
+  });
+
+  it("filters the risk mix and the exception list from a channel bar", async () => {
+    const user = userEvent.setup();
+    render(<BiPage role="planner" />);
+    const bars = await screen.findByTestId("bi-channel-bars");
+    await user.click(within(bars).getByRole("button", { name: "Filter by channel D2C" }));
+
+    await waitFor(() => expect(api.biDashboardExceptions)
+      .toHaveBeenCalledWith({ channel: "D2C", risk_type: "" }));
+    expect(await screen.findByTestId("bi-filter-channel")).toHaveTextContent("Channel: D2C");
+    expect(screen.getByTestId("bi-insight-scope")).toHaveTextContent("D2C: 20 exceptions");
+    expect(within(screen.getByTestId("bi-risk-bars")).getAllByRole("button")).toHaveLength(1);
+    expect(within(screen.getByTestId("bi-top-table")).getByText("PROD_9001")).toBeInTheDocument();
+    expect(within(screen.getByTestId("bi-top-table")).queryByText("PROD_2742")).toBeNull();
+  });
+
+  it("keeps every channel visible while one is selected", async () => {
+    const user = userEvent.setup();
+    render(<BiPage role="planner" />);
+    const bars = await screen.findByTestId("bi-channel-bars");
+    await user.click(within(bars).getByRole("button", { name: "Filter by channel D2C" }));
+    await screen.findByTestId("bi-filter-channel");
+    expect(within(bars).getByRole("button", { name: "Filter by channel AMAZON" })).toBeInTheDocument();
+    expect(within(bars).getByRole("button", { name: "Filter by channel B2B" })).toBeInTheDocument();
+  });
+
+  it("filters the channel mix from a risk row", async () => {
+    const user = userEvent.setup();
+    render(<BiPage role="planner" />);
+    const rows = await screen.findByTestId("bi-risk-bars");
+    await user.click(within(rows).getByRole("button", { name: "Filter by risk type OOS exposure" }));
+    await waitFor(() => expect(api.biDashboardExceptions)
+      .toHaveBeenCalledWith({ channel: "", risk_type: "OOS_RISK" }));
+    expect(await screen.findByTestId("bi-filter-risk")).toHaveTextContent("Risk: OOS exposure");
+  });
+
+  it("clears a filter when the selected bar is clicked again", async () => {
+    const user = userEvent.setup();
+    render(<BiPage role="planner" />);
+    const bars = await screen.findByTestId("bi-channel-bars");
+    await user.click(within(bars).getByRole("button", { name: "Filter by channel D2C" }));
+    await screen.findByTestId("bi-filter-channel");
+    await user.click(within(bars).getByRole("button", { name: "Filter by channel D2C" }));
+    await waitFor(() => expect(screen.queryByTestId("bi-filter-channel")).toBeNull());
+    expect(screen.getByTestId("bi-filter-hint")).toBeInTheDocument();
+  });
+
+  it("clears every filter from the filter bar", async () => {
+    const user = userEvent.setup();
+    render(<BiPage role="planner" />);
+    const bars = await screen.findByTestId("bi-channel-bars");
+    await user.click(within(bars).getByRole("button", { name: "Filter by channel D2C" }));
+    await screen.findByTestId("bi-filter-clear");
+    await user.click(screen.getByTestId("bi-filter-clear"));
+    await waitFor(() => expect(screen.queryByTestId("bi-filter-channel")).toBeNull());
+    expect(screen.queryByTestId("bi-insight-scope")).toBeNull();
+    expect(within(screen.getByTestId("bi-top-table")).getByText("PROD_2742")).toBeInTheDocument();
+  });
+
+  it("discloses that the exception list is a top-10 view", async () => {
+    render(<BiPage role="planner" />);
+    const panel = await screen.findByTestId("bi-top-panel");
+    expect(within(panel).getByText(/10 largest absolute exposures/)).toBeInTheDocument();
+    expect(within(panel).getByText(/full exception population is not listed here/)).toBeInTheDocument();
   });
 });

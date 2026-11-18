@@ -124,10 +124,21 @@ def _exceptions_breakdown(
         top_params.append(risk_type)
     top_sql += " ORDER BY ABS(var_gbp) DESC LIMIT 10"
 
+    totals_sql = ("SELECT COUNT(*) AS exceptions, COALESCE(SUM(var_gbp), 0) AS var_gbp "
+                  "FROM triage_items WHERE state = 'EXCEPTION_REVIEW'")
+    totals_params: list = []
+    if channel:
+        totals_sql += " AND channel = ?"
+        totals_params.append(channel)
+    if risk_type:
+        totals_sql += " AND risk_type = ?"
+        totals_params.append(risk_type)
+
     return {
         "exceptions_by_channel": _rows(con, channel_sql, tuple(channel_params)),
         "var_by_risk_type": _rows(con, risk_sql, tuple(risk_params)),
         "top_exceptions": _rows(con, top_sql, tuple(top_params)),
+        "totals": _rows(con, totals_sql, tuple(totals_params))[0],
         "filter": {"channel": channel or None, "risk_type": risk_type or None},
     }
 

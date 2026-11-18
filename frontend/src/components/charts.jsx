@@ -24,9 +24,30 @@ function SrTable({ caption, rows, valueLabel = "Value", format = fmtNum }) {
   );
 }
 
-export function BarChart({ data, height = 180, color = IBCS.actual, format = fmtNum, testId, label = "Bar chart" }) {
+function selectProps(onSelect, label, active, selectLabel) {
+  if (typeof onSelect !== "function") return {};
+  const pick = () => onSelect(label === active ? null : label);
+  return {
+    role: "button",
+    tabIndex: 0,
+    "aria-pressed": label === active,
+    "aria-label": `${selectLabel} ${label}`,
+    className: "cursor-pointer",
+    onClick: pick,
+    onKeyDown: (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    },
+  };
+}
+
+export function BarChart({ data, height = 180, color = IBCS.actual, format = fmtNum, testId, label = "Bar chart",
+  onSelect, selected = null, selectLabel = "Filter by" }) {
   const rows = (data || []).map((d) => ({ label: String(d.label ?? ""), value: Number(d.value) || 0 }));
   if (!rows.length) return <Empty testId={testId} />;
+  const active = typeof onSelect === "function" && selected != null ? String(selected) : null;
   const W = 320, H = height, padL = 6, padR = 6, padT = 18, padB = 26;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const max = Math.max(...rows.map((r) => r.value), 1);
@@ -34,7 +55,8 @@ export function BarChart({ data, height = 180, color = IBCS.actual, format = fmt
   const barW = Math.min(step * 0.62, 34);
   return (
     <div data-testid={testId}>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={label}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full"
+        role={typeof onSelect === "function" ? "group" : "img"} aria-label={label}>
         <title>{label}</title>
         <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={IBCS.grid} />
         {rows.map((r, i) => {
@@ -42,8 +64,10 @@ export function BarChart({ data, height = 180, color = IBCS.actual, format = fmt
           const x = padL + step * i + (step - barW) / 2;
           const y = padT + plotH - h;
           return (
-            <g key={`${r.label}-${i}`}>
-              <rect x={x} y={y} width={barW} height={Math.max(h, 1)} rx="2" fill={color} opacity="0.9" />
+            <g key={`${r.label}-${i}`} {...selectProps(onSelect, r.label, active, selectLabel)}>
+              <rect x={x} y={y} width={barW} height={Math.max(h, 1)} rx="2" fill={color}
+                opacity={active && r.label !== active ? 0.3 : 0.9}
+                stroke={r.label === active ? IBCS.valueText : "none"} strokeWidth="1" />
               <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize="8" fill={IBCS.valueText}>{format(r.value)}</text>
               <text x={x + barW / 2} y={H - 8} textAnchor="middle" fontSize="7.5" fill={IBCS.axisText}>{r.label}</text>
             </g>
@@ -55,9 +79,11 @@ export function BarChart({ data, height = 180, color = IBCS.actual, format = fmt
   );
 }
 
-export function HBarList({ data, format = fmtNum, testId, color = IBCS.actual, label = "Horizontal bar chart" }) {
+export function HBarList({ data, format = fmtNum, testId, color = IBCS.actual, label = "Horizontal bar chart",
+  onSelect, selected = null, selectLabel = "Filter by" }) {
   const rows = (data || []).map((d) => ({ label: String(d.label ?? ""), value: Number(d.value) || 0 }));
   if (!rows.length) return <Empty testId={testId} />;
+  const active = typeof onSelect === "function" && selected != null ? String(selected) : null;
   const max = Math.max(...rows.map((r) => Math.abs(r.value)), 1);
   return (
     <div data-testid={testId} className="space-y-2">
@@ -65,12 +91,15 @@ export function HBarList({ data, format = fmtNum, testId, color = IBCS.actual, l
         const negative = r.value < 0;
         const pct = (Math.abs(r.value) / max) * 100;
         return (
-          <div key={`${r.label}-${i}`} className="flex items-center gap-2 text-[10px]">
+          <div key={`${r.label}-${i}`} {...selectProps(onSelect, r.label, active, selectLabel)}
+            className={`flex items-center gap-2 text-[10px] ${typeof onSelect === "function" ? "cursor-pointer" : ""}`}>
             <span className="w-20 shrink-0 text-right font-mono text-slate-300">{negative ? format(r.value) : ""}</span>
-            <span className="w-24 shrink-0 truncate text-slate-300" title={r.label}>{r.label}</span>
+            <span className={`w-24 shrink-0 truncate ${r.label === active ? "text-white font-semibold" : "text-slate-300"}`}
+              title={r.label}>{r.label}</span>
             <div className="relative flex-1 h-2 bg-slate-800 rounded">
               <div className="absolute top-0 h-2 rounded"
-                style={{ width: `${pct}%`, left: negative ? `${100 - pct}%` : 0, background: color }} />
+                style={{ width: `${pct}%`, left: negative ? `${100 - pct}%` : 0, background: color,
+                  opacity: active && r.label !== active ? 0.3 : 1 }} />
             </div>
             <span className="w-20 shrink-0 font-mono text-slate-300">{negative ? "" : format(r.value)}</span>
           </div>
@@ -137,11 +166,13 @@ export function LineChart({ series, labels, height = 200, testId, format = fmtNu
   );
 }
 
-export function DonutChart({ data, testId, size = 150, label = "Donut chart" }) {
+export function DonutChart({ data, testId, size = 150, label = "Donut chart",
+  onSelect, selected = null, selectLabel = "Filter by" }) {
   const rows = (data || [])
     .map((d, i) => ({ label: String(d.label ?? ""), value: Number(d.value) || 0, color: d.color || PALETTE[i % PALETTE.length] }))
     .filter((d) => d.value > 0);
   if (!rows.length) return <Empty testId={testId} />;
+  const active = typeof onSelect === "function" && selected != null ? String(selected) : null;
   const total = rows.reduce((s, d) => s + d.value, 0);
   const r = 42, c = 2 * Math.PI * r;
   let offset = 0;
@@ -153,7 +184,9 @@ export function DonutChart({ data, testId, size = 150, label = "Donut chart" }) 
         {rows.map((d) => {
           const len = (d.value / total) * c;
           const el = (
-            <circle key={d.label} cx="60" cy="60" r={r} fill="none" stroke={d.color} strokeWidth="16"
+            <circle key={d.label} cx="60" cy="60" r={r} fill="none" stroke={d.color}
+              strokeWidth={d.label === active ? 20 : 16}
+              opacity={active && d.label !== active ? 0.35 : 1}
               strokeDasharray={`${len} ${c - len}`} strokeDashoffset={-offset} transform="rotate(-90 60 60)" />
           );
           offset += len;
@@ -162,11 +195,15 @@ export function DonutChart({ data, testId, size = 150, label = "Donut chart" }) 
       </svg>
       <ul className="space-y-1 text-[11px]">
         {rows.map((d) => (
-          <li key={d.label} className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full" style={{ background: d.color }} aria-hidden="true" />
-            <span className="text-slate-300">{d.label}</span>
-            <span className="font-mono text-slate-300">{fmtNum(d.value)}</span>
-            <span className="text-slate-400">({Math.round((d.value / total) * 100)}%)</span>
+          <li key={d.label}>
+            <button type="button" {...selectProps(onSelect, d.label, active, selectLabel)}
+              className={`flex items-center gap-2 rounded px-1 -mx-1 ${typeof onSelect === "function" ? "cursor-pointer hover:bg-slate-800" : "cursor-default"}`}
+              aria-pressed={typeof onSelect === "function" ? d.label === active : undefined}>
+              <span className="h-2 w-2 rounded-full" style={{ background: d.color }} aria-hidden="true" />
+              <span className={d.label === active ? "text-white font-semibold" : "text-slate-300"}>{d.label}</span>
+              <span className="font-mono text-slate-300">{fmtNum(d.value)}</span>
+              <span className="text-slate-400">({Math.round((d.value / total) * 100)}%)</span>
+            </button>
           </li>
         ))}
       </ul>

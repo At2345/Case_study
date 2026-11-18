@@ -138,6 +138,7 @@ export const api = {
   mcpServers: () => request("/api/v1/mcp/servers"),
   biStatus: () => request("/api/v1/bi/status"),
   biDashboard: () => request("/api/v1/bi/dashboard"),
+  biDashboardExceptions: (params) => request(`/api/v1/bi/dashboard/exceptions${qs(params)}`),
   biKpiTree: () => request("/api/v1/bi/kpi-tree"),
   biMetrics: () => request("/api/v1/bi/metrics"),
   biDiagnostics: (series) => request(`/api/v1/bi/diagnostics${qs({ series })}`),
