@@ -202,6 +202,8 @@ class ProviderPolicy:
     def permits(self, client: Any) -> bool:
         if not self.require_zdr:
             return True
+        if getattr(client, "local", False) is True:
+            return True  # runs on this machine (e.g. Ollama on localhost): no prompt leaves the process host
         return type(client).__name__.lower() in self.zdr_declared
 
     def attested(self, providers: Iterable[str]) -> bool:

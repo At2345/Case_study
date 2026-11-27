@@ -110,7 +110,9 @@ def client_from_env():
     from app.ai.privacy import PrivacyClient, ProviderPolicy, set_active
     from app.narrative.client import GeminiClient, GlmClient
     from app.narrative.local_hf import LocalHfClient
-    candidates = [c for c in (EmergentLlmClient.from_env(), GeminiClient.from_env(),
+    from app.narrative.ollama import OllamaClient
+    # A configured local Ollama model goes first: free, and prompts stay on this machine.
+    candidates = [c for c in (OllamaClient.from_env(), EmergentLlmClient.from_env(), GeminiClient.from_env(),
                               GlmClient.from_env(), LocalHfClient.from_env()) if c is not None]
     for c in candidates:
         PROVIDER_STATUS.setdefault(type(c).__name__, {"configured": True, "ok": None, "error": None, "at": None})

@@ -34,6 +34,9 @@ LOCKOUT_SECONDS = 300
 SUPPRESS_PCT = 0.05
 ALL_ROLES = (Role.PLANNER.value, Role.ADMIN.value, Role.AUDITOR.value)
 WRITE_ROLES = (Role.PLANNER.value, Role.ADMIN.value)
+# Machine clients: workflow endpoints (also covers /workflows-executor) and cover policies (sales snapshots).
+API_KEY_PATHS = ("/api/v1/workflows", "/api/v1/workflow-runs", "/api/v1/cover/policies", "/api/v1/cover/lots",
+                 "/api/v1/channels", "/api/v1/agents")
 
 
 def _now() -> str:
@@ -107,13 +110,26 @@ def create_app(
     )
 
     # ------------------------------------------------------------------ auth helpers
-    def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Dict[str, str]:
+    from app.store.api_keys import ApiKeyStore, is_api_key
+    api_keys = ApiKeyStore(store_dir / "api_keys.json")
+    app.state.api_keys = api_keys
+
+    def current_user(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> Dict[str, str]:
         if settings.demo_mode:
             # Demo: pretend to be a planner by default
             return {"username": "demo", "role": Role.PLANNER.value, "jti": "demo",
                     "tenant": DEFAULT_TENANT}
         if creds is None:
             raise HTTPException(status_code=401, detail="Not authenticated", headers={"WWW-Authenticate": "Bearer"})
+        if is_api_key(creds.credentials):
+            key = api_keys.authenticate(creds.credentials)
+            if key is None:
+                raise HTTPException(status_code=401, detail="Invalid or revoked API key", headers={"WWW-Authenticate": "Bearer"})
+            # Machine clients (n8n, scripts) may only use the workflow automation endpoints.
+            if not request.url.path.startswith(API_KEY_PATHS):
+                raise HTTPException(status_code=403, detail="API keys can only call the workflow endpoints")
+            return {"username": f"apikey:{key['name']}", "role": key["role"], "jti": key["id"],
+                    "tenant": key["tenant"], "via": "api_key"}
         try:
             claims = decode_token(secret, creds.credentials)
         except TokenError:
@@ -379,6 +395,38 @@ def create_app(
     register_mcp(app, {"state": state, "require": require, "all_roles": ALL_ROLES, "mcp_store": mcp})
     from app.api.bi import register as register_bi
     register_bi(app, {"require": require, "all_roles": ALL_ROLES, "write_roles": WRITE_ROLES, "llm": llm})
+    from app.api.workflows import register as register_workflows
+    from app.workflows.service import WorkflowService
+    app.state.workflows = WorkflowService(store_dir / "workflows", notes=notes,
+                                          four_eyes=os.environ.get("WORKFLOW_FOUR_EYES", "false").lower() == "true")
+    from app.workflows.runners import runner_from_env
+    app.state.workflow_runner = runner_from_env(app.state.workflows, os.environ)
+    if app.state.workflow_runner.name == "temporal":
+        log.info("Workflow runs execute on Temporal at %s", os.environ.get("TEMPORAL_ADDRESS"))
+    from app.api.channels import register as register_channels
+    from app.channels import connector_types
+    from app.channels.hub import ChannelHub, set_current
+    from app.channels.store import ChannelStore
+    from app.channels.vault import Vault
+    app.state.channel_hub = ChannelHub(ChannelStore(store_dir / "channels" / "channels.db"),
+                                       Vault.from_env_or_file(store_dir / "channels"), connector_types(),
+                                       workflows=app.state.workflows, runner=app.state.workflow_runner)
+    set_current(app.state.channel_hub)  # workflow nodes and the Temporal worker reach channels through it
+    register_workflows(app, {"require": require, "all_roles": ALL_ROLES, "workflows": app.state.workflows,
+                             "runner": app.state.workflow_runner, "api_keys": api_keys,
+                             "cors_origins": tuple(cors_origins), "llm": llm, "hub": app.state.channel_hub,
+                             "benchmark_min_tenants": int(os.environ.get("WORKFLOW_BENCHMARK_MIN_TENANTS", "3")),
+                             "mcp_allow_approvals": os.environ.get("WORKFLOW_MCP_ALLOW_APPROVALS", "false").lower() == "true"})
+    register_channels(app, {"require": require, "all_roles": ALL_ROLES, "hub": app.state.channel_hub})
+    from app.api.agents import register as register_agents
+    from app.narrative.ollama import OllamaClient
+    register_agents(app, {"require": require, "all_roles": ALL_ROLES, "mcp": app.state.playbook_mcp,
+                          "llm": OllamaClient.from_env() or llm, "store_dir": store_dir})
+    from app.api.cover import register as register_cover
+    register_cover(app, {"require": require, "all_roles": ALL_ROLES, "state": state, "decisions": decisions,
+                         "store_dir": store_dir, "workflows": app.state.workflows, "notes": notes,
+                         "benchmark_min_tenants": int(os.environ.get("WORKFLOW_BENCHMARK_MIN_TENANTS", "3")),
+                         "runner": app.state.workflow_runner})
     return app
 
 

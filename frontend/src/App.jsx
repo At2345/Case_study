@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import Login from "./components/Login";
 import Header from "./components/Header";
 import SummaryCards from "./components/SummaryCards";
@@ -12,6 +12,12 @@ import CopilotPage from "./pages/CopilotPage";
 import ScenariosPage from "./pages/ScenariosPage";
 import McpPage from "./pages/McpPage";
 import BiPage from "./pages/BiPage";
+import CoverPage from "./pages/CoverPage";
+import ChannelsPage from "./pages/ChannelsPage";
+import IntegrationsPage from "./pages/IntegrationsPage";
+
+// React Flow is large; load the editor only when the Workflows tab is opened.
+const WorkflowsPage = lazy(() => import("./pages/WorkflowsPage"));
 import { api, getStoredUser, getToken, onUnauthorized } from "./services/api";
 
 const DEFAULT_FILTERS = { state: "EXCEPTION_REVIEW", channel: "", risk_type: "", pending: "", limit: 50, offset: 0 };
@@ -166,6 +172,14 @@ export default function App() {
       {page === "copilot" && <CopilotPage onNavigateAction={navigateAction} />}
       {page === "mcp" && user.role === "admin" && <McpPage role={user.role} />}
       {page === "bi" && <BiPage role={user.role} />}
+      {page === "cover" && <CoverPage role={user.role} />}
+      {page === "channels" && <ChannelsPage role={user.role} />}
+      {page === "integrations" && user.role === "admin" && <IntegrationsPage />}
+      {page === "workflows" && (
+        <Suspense fallback={<div className="px-8 py-6 text-xs text-slate-400">Loading workflow editor…</div>}>
+          <WorkflowsPage role={user.role} />
+        </Suspense>
+      )}
       {page === "scenarios" && <ScenariosPage user={user} summary={summary} initialPrompt={scenarioPrompt} />}
       {page === "workbench" && <SummaryCards summary={summary} />}
       {page === "workbench" && <main className="flex-1 px-8 pb-8 grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -45,11 +45,26 @@ def validate(spec: Dict[str, Any]) -> None:
         raise ValueError("Day must be between 1 and 28 so the run happens every month.")
 
 
+def throttled(fn, seconds: float, clock=None):
+    """Wrap a scheduler hook so fn(now) runs at most once per `seconds` (the scheduler ticks every 30 s)."""
+    import time
+    clock = clock or time.monotonic
+    last = {"t": None}
+
+    def hook(now):
+        t = clock()
+        if last["t"] is None or t - last["t"] >= seconds:
+            last["t"] = t
+            fn(now)
+    return hook
+
+
 class Scheduler:
     """Polls the schedule store and fires due jobs through the JobRunner (claim is atomic in Mongo)."""
 
-    def __init__(self, schedules, jobs, poll_seconds: float = 30.0) -> None:
+    def __init__(self, schedules, jobs, poll_seconds: float = 30.0, hooks: Optional[list] = None) -> None:
         self.schedules, self.jobs, self.poll = schedules, jobs, poll_seconds
+        self.hooks = list(hooks or [])  # extra callables run every tick with `now` (e.g. workflow resumes)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -69,6 +84,11 @@ class Scheduler:
                 fired.append(s["job"])
             except RuntimeError as exc:
                 self.schedules.record(s["job"], now, f"skipped: {exc}")
+        for hook in self.hooks:
+            try:
+                hook(now)
+            except Exception:  # a failing hook must not stop scheduled jobs
+                log.exception("scheduler hook failed")
         return fired
 
     def _loop(self) -> None:

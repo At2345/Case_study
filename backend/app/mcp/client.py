@@ -52,6 +52,8 @@ def _rpc(config: Dict[str, Any], method: str, params: Optional[Dict[str, Any]] =
         raise McpError("auth", f"MCP server rejected the credentials (HTTP {resp.status_code})")
     if resp.status_code >= 400:
         raise McpError("server_error", f"MCP server returned HTTP {resp.status_code}")
+    if request_id is None and (resp.status_code == 202 or not resp.content):
+        return {}  # notification acknowledged (spec: 202 Accepted, no body)
     if len(resp.content) > MAX_RESULT_BYTES:
         raise McpError("server_error", f"MCP response exceeds the {MAX_RESULT_BYTES // 1024} KB cap")
     try:

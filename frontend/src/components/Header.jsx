@@ -4,13 +4,13 @@ import { monthLabel } from "../lib/format";
 import NotificationBell from "./NotificationBell";
 
 export const PAGES = [
-  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["scenarios", "Scenarios"], ["supply", "Supply & Risk"], ["operations", "Operations"], ["bi", "BI dashboards"], ["copilot", "Co-pilot"],
+  ["workbench", "Workbench"], ["scorecard", "FVA & audit"], ["scenarios", "Scenarios"], ["supply", "Supply & Risk"], ["operations", "Operations"], ["bi", "BI dashboards"], ["channels", "Channels"], ["workflows", "Workflows"], ["cover", "Overstock cover"], ["copilot", "Co-pilot"],
 ];
 
 export default function Header({ summary, user, onExport, onCommit, onLogout, committing, page, onPage, onBriefing, onNotification }) {
   const canWrite = user.role === "planner" || user.role === "admin";
   const canCommit = canWrite && summary && !summary.committed && summary.pending_decisions === 0;
-  const pages = user.role === "admin" ? [...PAGES, ["mcp", "MCP"]] : PAGES;
+  const pages = user.role === "admin" ? [...PAGES, ["mcp", "MCP"], ["integrations", "Integrations"]] : PAGES;
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-8 pt-4 sticky top-0 z-50">
      <div className="flex justify-between items-center gap-4 flex-wrap">

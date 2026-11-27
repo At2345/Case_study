@@ -17,6 +17,8 @@ pymongo>=4.6
 # Preview runtime is Python 3.11: LangGraph 1.x (the <0.5 pin only applies to a 3.9 interpreter)
 langgraph>=0.2
 reportlab>=4.0
+# Durable workflow runs (used only when TEMPORAL_ADDRESS is set). 1.18.x still ships Python 3.9 wheels.
+temporalio>=1.18,<2
 python-dotenv>=1.0
 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
 emergentintegrations>=0.2
