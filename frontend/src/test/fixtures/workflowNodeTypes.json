@@ -1,0 +1,830 @@
+{
+ "node_types": [
+  {
+   "name": "trigger.manual",
+   "category": "trigger",
+   "description": "Start the run by hand or from the API.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "title": "ManualTriggerParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "trigger.sell_through_gap",
+   "category": "trigger",
+   "description": "Start when an insured batch sells slower than forecast.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "gap_threshold": {
+      "default": -0.2,
+      "description": "Fire when sell-through is this far below forecast (-0.2 = 20%)",
+      "maximum": 0.0,
+      "title": "Gap Threshold",
+      "type": "number"
+     },
+     "min_days_since_receipt": {
+      "default": 60,
+      "minimum": 0,
+      "title": "Min Days Since Receipt",
+      "type": "integer"
+     }
+    },
+    "title": "SellThroughTriggerParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "logic.if",
+   "category": "logic",
+   "description": "Branch on a comparison.",
+   "ports": [
+    "true",
+    "false"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "left": {
+      "title": "Left"
+     },
+     "op": {
+      "enum": [
+       "<",
+       "<=",
+       ">",
+       ">=",
+       "==",
+       "!="
+      ],
+      "title": "Op",
+      "type": "string"
+     },
+     "right": {
+      "title": "Right"
+     }
+    },
+    "required": [
+     "left",
+     "op",
+     "right"
+    ],
+    "title": "IfParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "logic.wait",
+   "category": "logic",
+   "description": "Pause the run for a number of days.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "days": {
+      "exclusiveMinimum": 0.0,
+      "maximum": 365.0,
+      "title": "Days",
+      "type": "number"
+     }
+    },
+    "required": [
+     "days"
+    ],
+    "title": "WaitParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "control.approval",
+   "category": "control",
+   "description": "Ask a person to approve before continuing.",
+   "ports": [
+    "approved",
+    "rejected"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "approver_role": {
+      "default": "planner",
+      "title": "Approver Role",
+      "type": "string"
+     },
+     "message": {
+      "default": "Please review this step.",
+      "title": "Message",
+      "type": "string"
+     }
+    },
+    "title": "ApprovalParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "agent.rescue_proposal",
+   "category": "agent",
+   "description": "Propose a rescue action for a slow batch. Heuristic placeholder for the rescue agent.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "marketplace": {
+      "title": "Marketplace",
+      "type": "string"
+     },
+     "units_on_hand": {
+      "minimum": 0,
+      "title": "Units On Hand",
+      "type": "integer"
+     },
+     "sell_through_gap": {
+      "description": "Actual vs forecast sell-through, e.g. -0.25",
+      "title": "Sell Through Gap",
+      "type": "number"
+     },
+     "unit_landed_cost_eur": {
+      "exclusiveMinimum": 0.0,
+      "title": "Unit Landed Cost Eur",
+      "type": "number"
+     },
+     "days_to_trigger": {
+      "description": "Days until the day-180 coverage trigger",
+      "minimum": 0,
+      "title": "Days To Trigger",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "sku",
+     "marketplace",
+     "units_on_hand",
+     "sell_through_gap",
+     "unit_landed_cost_eur",
+     "days_to_trigger"
+    ],
+    "title": "RescueProposalParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.change_price",
+   "category": "action",
+   "description": "Change the selling price of a SKU (simulated).",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": "estimated_cost_eur"
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "marketplace": {
+      "title": "Marketplace",
+      "type": "string"
+     },
+     "pct_change": {
+      "maximum": 50.0,
+      "minimum": -50.0,
+      "title": "Pct Change",
+      "type": "number"
+     },
+     "estimated_cost_eur": {
+      "default": 0,
+      "description": "Expected margin given up; counted against the budget",
+      "minimum": 0.0,
+      "title": "Estimated Cost Eur",
+      "type": "number"
+     }
+    },
+    "required": [
+     "sku",
+     "marketplace",
+     "pct_change"
+    ],
+    "title": "ChangePriceParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.transfer_stock",
+   "category": "action",
+   "description": "Move units to another marketplace (simulated).",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": false,
+    "needs_approval": true,
+    "locked": false,
+    "cost_param": "estimated_cost_eur"
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "from_marketplace": {
+      "title": "From Marketplace",
+      "type": "string"
+     },
+     "to_marketplace": {
+      "title": "To Marketplace",
+      "type": "string"
+     },
+     "units": {
+      "exclusiveMinimum": 0,
+      "title": "Units",
+      "type": "integer"
+     },
+     "estimated_cost_eur": {
+      "default": 0,
+      "minimum": 0.0,
+      "title": "Estimated Cost Eur",
+      "type": "number"
+     }
+    },
+    "required": [
+     "sku",
+     "from_marketplace",
+     "to_marketplace",
+     "units"
+    ],
+    "title": "TransferStockParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.notify",
+   "category": "action",
+   "description": "Send a message (recorded only in this version).",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "default": "in_app",
+      "enum": [
+       "in_app",
+       "email",
+       "slack"
+      ],
+      "title": "Channel",
+      "type": "string"
+     },
+     "to": {
+      "default": "planner",
+      "title": "To",
+      "type": "string"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     }
+    },
+    "required": [
+     "message"
+    ],
+    "title": "NotifyParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "agent.measure_outcome",
+   "category": "agent",
+   "description": "Measure what the rescue achieved: unsold units vs the baseline at decision time. Writes loss avoided to the decision ledger automatically (real runs only).",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "baseline_units_at_risk": {
+      "description": "Units expected to stay unsold without action (e.g. $nodes.propose.units_at_risk)",
+      "minimum": 0.0,
+      "title": "Baseline Units At Risk",
+      "type": "number"
+     },
+     "units_unsold": {
+      "description": "Units actually still unsold now (e.g. from a stock fetch)",
+      "minimum": 0.0,
+      "title": "Units Unsold",
+      "type": "number"
+     },
+     "unit_landed_cost_eur": {
+      "exclusiveMinimum": 0.0,
+      "title": "Unit Landed Cost Eur",
+      "type": "number"
+     },
+     "recovery_rate": {
+      "default": 0.0,
+      "description": "Share of cost recovered on unsold stock anyway (liquidation); 0 = full write-off",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Recovery Rate",
+      "type": "number"
+     },
+     "units_sold": {
+      "anyOf": [
+       {
+        "minimum": 0.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Units sold since the action (optional)",
+      "title": "Units Sold"
+     }
+    },
+    "required": [
+     "sku",
+     "baseline_units_at_risk",
+     "units_unsold",
+     "unit_landed_cost_eur"
+    ],
+    "title": "MeasureOutcomeParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.n8n_webhook",
+   "category": "action",
+   "description": "Call an n8n workflow through its Webhook node and continue with its JSON response.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": false,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "url": {
+      "description": "n8n Webhook node URL (production URL)",
+      "maxLength": 2048,
+      "pattern": "^https?://",
+      "title": "Url",
+      "type": "string"
+     },
+     "body": {
+      "anyOf": [
+       {
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "JSON body; defaults to the run context",
+      "title": "Body"
+     },
+     "secret_ref": {
+      "anyOf": [
+       {
+        "pattern": "^[A-Z0-9_]{1,40}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Sends env WF_SECRET_<REF> in the X-Workflow-Secret header",
+      "title": "Secret Ref"
+     },
+     "timeout_s": {
+      "default": 10,
+      "exclusiveMinimum": 0.0,
+      "maximum": 30.0,
+      "title": "Timeout S",
+      "type": "number"
+     },
+     "dry_run_response": {
+      "anyOf": [
+       {
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Response used instead of calling n8n in dry runs, so later steps can be tested",
+      "title": "Dry Run Response"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "title": "N8nWebhookParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "trigger.channel_event",
+   "category": "trigger",
+   "description": "Start when a channel reports an order, a stock change, low stock or an EDI document.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "event": {
+      "default": "order_created",
+      "description": "Channel event that starts the workflow",
+      "enum": [
+       "order_created",
+       "order_updated",
+       "inventory_changed",
+       "stock_low",
+       "edi_ship_notice",
+       "edi_invoice",
+       "edi_po_ack",
+       "edi_functional_ack",
+       "edi_error"
+      ],
+      "title": "Event",
+      "type": "string"
+     },
+     "connection_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only events from this connection (empty = all)",
+      "title": "Connection Id"
+     }
+    },
+    "title": "ChannelEventParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.channel_set_stock",
+   "category": "action",
+   "description": "Set the available stock of a SKU on one channel.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+     },
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "quantity": {
+      "minimum": 0,
+      "title": "Quantity",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "connection_id",
+     "sku",
+     "quantity"
+    ],
+    "title": "ChannelStockParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.channel_set_price",
+   "category": "action",
+   "description": "Set the price of a SKU on one channel.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": "estimated_cost_eur"
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+     },
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "price": {
+      "exclusiveMinimum": 0.0,
+      "title": "Price",
+      "type": "number"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Currency"
+     },
+     "estimated_cost_eur": {
+      "default": 0,
+      "description": "Expected margin given up; counted against the budget",
+      "minimum": 0.0,
+      "title": "Estimated Cost Eur",
+      "type": "number"
+     }
+    },
+    "required": [
+     "connection_id",
+     "sku",
+     "price"
+    ],
+    "title": "ChannelPriceParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.channel_broadcast_stock",
+   "category": "action",
+   "description": "Write one available quantity to every other channel that accepts stock updates.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": true,
+    "needs_approval": false,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "sku": {
+      "title": "Sku",
+      "type": "string"
+     },
+     "quantity": {
+      "minimum": 0.0,
+      "title": "Quantity",
+      "type": "number"
+     },
+     "source_connection": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Connection the change came from (not written back)",
+      "title": "Source Connection"
+     },
+     "buffer": {
+      "default": 0,
+      "description": "Units held back on every channel against overselling",
+      "minimum": 0,
+      "title": "Buffer",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "sku",
+     "quantity"
+    ],
+    "title": "BroadcastStockParams",
+    "type": "object"
+   }
+  },
+  {
+   "name": "action.edi_purchase_order",
+   "category": "action",
+   "description": "Send a purchase order (EDI 850) to a supplier. Commits money, so it always needs approval.",
+   "ports": [
+    "out"
+   ],
+   "policy": {
+    "reversible": false,
+    "needs_approval": true,
+    "locked": false,
+    "cost_param": null
+   },
+   "params_schema": {
+    "$defs": {
+     "PoLineParams": {
+      "additionalProperties": false,
+      "properties": {
+       "sku": {
+        "title": "Sku",
+        "type": "string"
+       },
+       "quantity": {
+        "exclusiveMinimum": 0.0,
+        "title": "Quantity",
+        "type": "number"
+       },
+       "unit_price": {
+        "anyOf": [
+         {
+          "minimum": 0.0,
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null,
+        "title": "Unit Price"
+       },
+       "supplier_sku": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null,
+        "title": "Supplier Sku"
+       }
+      },
+      "required": [
+       "sku",
+       "quantity"
+      ],
+      "title": "PoLineParams",
+      "type": "object"
+     }
+    },
+    "additionalProperties": false,
+    "properties": {
+     "connection_id": {
+      "description": "EDI supplier connection",
+      "title": "Connection Id",
+      "type": "string"
+     },
+     "lines": {
+      "items": {
+       "$ref": "#/$defs/PoLineParams"
+      },
+      "minItems": 1,
+      "title": "Lines",
+      "type": "array"
+     },
+     "po_number": {
+      "anyOf": [
+       {
+        "maxLength": 22,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Empty = PO prefix + run id",
+      "title": "Po Number"
+     },
+     "po_prefix": {
+      "default": "PO-",
+      "maxLength": 8,
+      "title": "Po Prefix",
+      "type": "string"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Currency"
+     }
+    },
+    "required": [
+     "connection_id",
+     "lines"
+    ],
+    "title": "EdiPurchaseOrderParams",
+    "type": "object"
+   }
+  }
+ ]
+}

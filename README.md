@@ -53,6 +53,102 @@ cd frontend
 npm run dev        # http://localhost:5173 (set VITE_API_URL if the API is not on :8000)
 ```
 
+### Workflow automation (playbooks)
+
+The **Workflows** tab is a drag-and-drop editor for rescue playbooks (engine in `backend/app/workflows`,
+API under `/api/v1/workflows` and `/api/v1/workflow-runs`). By default runs execute in-process and the
+API's scheduler resumes expired waits. For durable runs (waits of days, approvals that survive restarts)
+point the API at Temporal and start a worker with the same `STORE_DIR` / `MONGO_URL`:
+
+```powershell
+temporal server start-dev                                   # Temporal CLI dev server on localhost:7233
+$env:TEMPORAL_ADDRESS="localhost:7233"
+cd backend; python -m app.workflows.temporal_worker         # worker (task queue "playbooks")
+# then start the API with the same TEMPORAL_ADDRESS
+```
+
+Settings: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `WORKFLOW_FOUR_EYES`.
+`GET /api/v1/workflows-executor` reports which executor the API uses.
+
+**Machine access (n8n, scripts, AI agents).** An admin creates an API key with
+`POST /api/v1/admin/api-keys` (`{"name": "n8n", "role": "planner"}`; `auditor` = read-only). Keys only reach the
+workflow endpoints. The n8n nodes live in `integrations/n8n-nodes-sop-workbench`.
+
+**Template library and benchmark.** `GET /api/v1/workflows-templates` lists ready-made playbooks
+(`rescue-basic`, `rescue-measured`, `rescue-escalation`) with your results; install one with
+`POST /api/v1/workflows-templates/{id}/install`. Results of real runs are written to an insert-only,
+hash-chained decision-outcome ledger (`decisions.db`; `agent.measure_outcome` records loss avoided
+automatically). An admin can opt the tenant into the anonymised cross-company benchmark with
+`PUT /api/v1/admin/workflows-settings {"share_benchmarks": true}`: give-to-get (only sharing tenants see
+pooled figures) and shown only when at least `WORKFLOW_BENCHMARK_MIN_TENANTS` (default 3) companies contribute.
+
+**MCP server for AI agents.** `POST /api/v1/workflows/mcp` is a streamable-HTTP MCP endpoint (JSON responses)
+with tools `list_playbooks`, `get_playbook`, `list_runs`, `get_run`, `get_playbook_performance`,
+`list_templates`, `draft_playbook`, `record_outcome`, `start_run` and, only when
+`WORKFLOW_MCP_ALLOW_APPROVALS=true`, `decide_step`. `POST /api/v1/workflows/draft` turns a plain-language
+description into a draft playbook (LLM when configured, template fallback otherwise); drafts are never saved
+or run until a planner saves them. Point an MCP client (e.g. n8n's MCP Client Tool) at
+`<api>/api/v1/workflows/mcp` with header `Authorization: Bearer <api key>`. `start_run` is a dry run unless the
+agent passes `dry_run: false`; real runs keep their budget and approval gates. Browser `Origin`s must be in
+`CORS_ORIGINS`. Outbound: the `action.n8n_webhook` node calls an n8n Webhook (set
+`WORKFLOW_ALLOW_PRIVATE_WEBHOOKS=true` for n8n on localhost or a LAN; secrets via `WF_SECRET_<REF>`).
+
+### Channels, automations and AI agents (no licence cost)
+
+The **Channels** tab connects marketplaces, shops and suppliers through their own official APIs with your own
+credentials; no paid aggregator, EDI network or AI subscription is involved.
+
+| Connector | Covers | Notes |
+|---|---|---|
+| `shopify` | Shopify store (custom app) | orders, stock, prices, signed webhooks |
+| `woocommerce` | WooCommerce or your own website | orders, stock, prices, signed webhooks |
+| `amazon` | Amazon SP-API, all regions (private developer) | read-only for now: orders, FBA stock |
+| `ebay` | all eBay sites (free developer keys) | orders, stock, prices |
+| `mirakl` | any Mirakl-run marketplace (one connection each) | orders, stock, prices via offer imports |
+| `edi` | suppliers and retailers over X12 | 850 out; 855/856/810/997 in; file drop (`outbox/`, `inbox/`) |
+
+- Credentials are encrypted with a local key (`CHANNEL_VAULT_KEY`, or `var/channels/vault.key` is generated;
+  back it up) and are never returned by the API. Admins add connections; planners sync, view and act.
+- Sync runs on the scheduler per connection (`sync_minutes`). The first sync imports history silently; later
+  changes raise events (`order_created`, `order_updated`, `inventory_changed`, `stock_low`, `edi_*`) that
+  start workflows with a `trigger.channel_event` trigger. Shops can push events to the webhook URL shown in the tab.
+- Prebuilt automations in the template library: **stock sync across all channels** (with a safety buffer and no
+  ping-pong), **low-stock reorder from an EDI supplier** (purchase orders always need approval), and **new
+  order to your warehouse** through an n8n webhook. Describe-a-playbook drafting knows all channel nodes.
+- EDI files are moved to and from partners with any AS2/SFTP tool, for example the open-source Bots EDI
+  translator run as a separate program.
+- **Free local AI:** install [Ollama](https://ollama.com), run `ollama pull qwen2.5:14b`, then set
+  `OLLAMA_MODEL=qwen2.5:14b` (and `OLLAMA_URL` if it is not on `localhost:11434`). The operations agent in the
+  Channels tab, drafting and narratives then use the local model; prompts stay on your machine. The agent reads
+  through the same tools as the MCP server (`list_channel_connections`, `get_channel_inventory`,
+  `get_channel_orders`, ...) and only **proposes** changes, which a planner approves or rejects.
+
+Remaining costs are the trader's own seller and store accounts and the machine this runs on.
+
+### Overstock cover (pilot)
+
+The **Overstock cover** tab prices and runs a guaranteed floor value on unsold stock of a purchase order.
+Everything here is a pilot: quotes are indicative and non-binding, policies are internal commitments, and the
+default terms (`GET /api/v1/cover/terms`) are placeholders that need actuarial calibration before real use.
+
+1. **Quote** `POST /api/v1/cover/quotes`: demand from the platform forecast (`item_id`; planner consensus and
+   model sigma) or manual input. Lognormal demand gives expected unsold units, claim probability and expected
+   loss; cover is capped at the P80 recommended quantity, with an excess and coinsurance. Grades A-E; E is
+   declined. The expected loss is scaled by the tenant's **experience factor** and the **recovery rate** is
+   learned from resold stock, both credibility-weighted (pooled across sharing companies as the complement).
+2. **Bind** `POST /api/v1/cover/quotes/{id}/bind`, optionally linking a rescue playbook.
+3. **Monitor** `POST /api/v1/cover/policies/{id}/observations` (planner, ERP or n8n via API key): sell-through
+   is compared with the seasonal forecast curve; a gap beyond the threshold starts the rescue playbook (not in
+   the first 14 days, at most once per 30 days). The scheduler reminds planners when snapshots stop and admins
+   when a policy is ready to settle.
+4. **Settle** `POST /api/v1/cover/policies/{id}/settle` (admin, after the window): cap, excess and payout per
+   unit; paid units open a **recovery lot**.
+5. **Recover** `POST /api/v1/cover/lots/{id}/bids` (b2b, outlet or donation; buyers can use API keys) and
+   `POST /api/v1/cover/lots/{id}/award` (admin). `GET /api/v1/cover/portfolio` reports premium, claims,
+   recovered value, net loss ratio, A/E and open exposure.
+
+Admins manage API keys and the benchmark sharing switch on the **Integrations** tab.
+
 ### 4. BI dashboards
 
 The **BI dashboards** page renders the cycle KPIs and nine charts natively from a read-only SQLite mart

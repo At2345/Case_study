@@ -1,0 +1,39 @@
+{
+  "name": "n8n-nodes-sop-workbench",
+  "version": "0.1.0",
+  "description": "n8n nodes for the S&OP Workbench: start and approve overstock-rescue playbook runs, and trigger on runs that need approval or finish.",
+  "license": "MIT",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "demand-planning",
+    "inventory"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "test": "npm run build && node --test \"test/*.test.mjs\""
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/SopWorkbenchApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/SopWorkbench/SopWorkbench.node.js",
+      "dist/nodes/SopWorkbenchTrigger/SopWorkbenchTrigger.node.js"
+    ]
+  },
+  "devDependencies": {
+    "n8n-workflow": "^2.49.5",
+    "typescript": "~5.9.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

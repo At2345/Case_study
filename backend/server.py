@@ -31,8 +31,13 @@ app = create_default_app()
 @app.on_event("startup")
 def start_scheduler() -> None:
     if app.state.jobs is not None and os.environ.get("SCHEDULER_ENABLED", "true").lower() == "true":
-        from app.orchestration.scheduler import Scheduler
-        app.state.scheduler = Scheduler(app.state.schedules, app.state.jobs)
+        from app.orchestration.scheduler import Scheduler, throttled
+        hooks = [app.state.workflows.resume_due] if getattr(app.state, "workflows", None) is not None else []
+        if getattr(app.state, "channel_hub", None) is not None:
+            hooks.append(throttled(app.state.channel_hub.sync_due, seconds=60))  # per-connection interval inside
+        if getattr(app.state, "cover_monitor", None) is not None:
+            hooks.append(throttled(app.state.cover_monitor, seconds=600))  # reminders need no 30 s cadence
+        app.state.scheduler = Scheduler(app.state.schedules, app.state.jobs, hooks=hooks)
         app.state.scheduler.start()
 
 
